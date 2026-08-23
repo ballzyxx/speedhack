@@ -16,8 +16,8 @@ module.exports = function migrate(oldVersion, oldSettings) {
         showIndicator: true,
         indicatorAbnormalityId: 4620,
         triggerItemId: 0,
-        hotkey: 'xbutton1',
-        hotkeyMode: 'hold',
+        hotkey: '',
+        hotkeyMode: 'toggle',
         ahkPath: '%ProgramFiles%\\AutoHotkey\\v2\\AutoHotkey64.exe',
         presets: {
             walk:   1.5,
