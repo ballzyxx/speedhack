@@ -1,5 +1,10 @@
 # Speedhack — Changelog
 
+## 2.7 (2026-08-23)
+
+Version label set to 2.7.
+
+---
 ## 2.2 (2026-08-23)
 
 ### Fixed
