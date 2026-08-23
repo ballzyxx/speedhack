@@ -69,6 +69,11 @@ module.exports = function Speedhack(mod) {
     let lastStatUpdate = null;   // last real S_PLAYER_STAT_UPDATE (full block)
     let liveHp = null;           // latest real current HP (tracked separately)
     let liveMaxHp = null;        // latest real max HP
+    // Disk cache is only for toolbox reload mid-session. Never inject those
+    // packets until the server has sent a live stat/move packet on THIS
+    // connection — a stale S_PLAYER_STAT_UPDATE (null fields, old HP, etc.)
+    // crashes the client or drops the socket as soon as you enter the world.
+    let statsFromThisConnection = false;
     const diag = {
         lastReplayAt: 0,
         lastReplayErr: null,
@@ -255,6 +260,13 @@ module.exports = function Speedhack(mod) {
     mod.hook('S_LOGIN', '*', (event) => {
         myGameId = event.gameId;
         inCombat = false;
+        // Stale packets from the last Toolbox session must not be injected
+        // during login — that can crash the client or drop the connection.
+        lastMoveType = null;
+        lastStatUpdate = null;
+        liveHp = null;
+        liveMaxHp = null;
+        statsFromThisConnection = false;
         // Always start off when you enter a character. Turn it on with - / spd.
         if (cfg.enabled) setEnabled(false, 'login');
     });
@@ -312,6 +324,7 @@ module.exports = function Speedhack(mod) {
         }
         // Cache un-modified values so we can restore on disable.
         lastMoveType = Object.assign({}, event);
+        statsFromThisConnection = true;
         diag.lastMovePacketAt = Date.now();
         scheduleSaveRuntimeCache();
         const changed = multiplySpeedFields(event); // per-field multipliers
@@ -329,6 +342,7 @@ module.exports = function Speedhack(mod) {
         // No gameId on this packet — it's implicitly "me", so safe to
         // always multiply.
         lastStatUpdate = Object.assign({}, event);
+        statsFromThisConnection = true;
         diag.lastStatPacketAt = Date.now();
         if (event.hp !== undefined)    liveHp = event.hp;
         if (event.maxHp !== undefined) liveMaxHp = event.maxHp;
@@ -405,6 +419,7 @@ module.exports = function Speedhack(mod) {
     function replayCachedMoveAt(forceMultiplier) {
         diag.lastReplayAt = Date.now();
         diag.lastReplayErr = null;
+        if (!statsFromThisConnection) return;
         if (lastMoveType) {
             const pkt = Object.assign({}, lastMoveType);
             multiplySpeedFields(pkt, forceMultiplier);
@@ -463,12 +478,17 @@ module.exports = function Speedhack(mod) {
 
     // ----- enable/disable chokepoint -----
     function setEnabled(on, source) {
-        if (cfg.enabled === on) { applyIndicator(on); return; }
+        if (cfg.enabled === on) {
+            if (source !== 'login') applyIndicator(on);
+            return;
+        }
         cfg.enabled = on;
-        applyIndicator(on);
-        // Replay cached move so the server picks up the new multiplier
-        // immediately instead of waiting for natural broadcast.
-        replayCachedMoveAt(on ? undefined : 1.0);
+        if (source !== 'login') {
+            applyIndicator(on);
+            // Replay cached move so the client picks up the new multiplier
+            // immediately instead of waiting for natural broadcast.
+            replayCachedMoveAt(on ? undefined : 1.0);
+        }
         broadcastUiState();
         if (source && source.startsWith('hotkey/hold')) return;
         log(`${on ? 'ON' : 'OFF'} (${source}) multiplier=${cfg.multiplier}`);
@@ -968,19 +988,13 @@ module.exports = function Speedhack(mod) {
     registerUiHotkey();
     grabGameId();
     loadRuntimeCache();
-    if (cfg.enabled) {
-        try { replayCachedMoveAt(); } catch (_) {}
-        if (myGameId && cfg.showIndicator) {
-            applyIndicator(true);
-            mod.setTimeout(() => applyIndicator(true), 800);
-        } else if (cfg.showIndicator) {
-            scheduleStartupIndicator();
-        }
-    }
+    // Do not inject cached stat/move packets or fake buffs here. NetworkMods
+    // construct the instant you enter the world; last session's STAT_UPDATE
+    // (often with null fields) will drop the client before S_LOGIN even runs.
 
     this.destructor = () => {
         saveRuntimeCache();
-        try { applyIndicator(false); } catch (_) {}
+        try { if (statsFromThisConnection) applyIndicator(false); } catch (_) {}
         try { replayCachedMoveAt(1.0); } catch (_) {}
         stopAhk();
         unregisterUiHotkey();

@@ -1,5 +1,12 @@
 # Speedhack — Changelog
 
+## 2.2 (2026-08-23)
+
+### Fixed
+- Do not inject last session's `S_PLAYER_STAT_UPDATE` / move packets (or fake buffs) when the mod loads or when it turns itself off on login. That was dropping the client about a second after entering the world.
+
+---
+
 ## 2.1 (2026-08-23)
 
 ### Changed
