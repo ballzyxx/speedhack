@@ -1,5 +1,12 @@
 # Speedhack — Changelog
 
+## 2.1 (2026-08-23)
+
+### Changed
+- First-install default multiplier is **1.0** (no speed boost until you raise it)
+
+---
+
 ## 2.0 (2026-08-23)
 
 Version label set to 2.0.

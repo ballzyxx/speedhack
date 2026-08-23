@@ -4,7 +4,7 @@
 module.exports = function migrate(oldVersion, oldSettings) {
     const defaults = {
         enabled: false,
-        multiplier: 2.0,
+        multiplier: 1.0,
         fieldMultipliers: {
             walkSpeed:  null,
             runSpeed:   null,
