@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.0 (2026-08-23)
+
+Current release.
+
+---
+
 ## 2.2 (2026-08-23)
 
 ### Fixed
