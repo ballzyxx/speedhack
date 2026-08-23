@@ -8,7 +8,6 @@
 module.exports = [
     { key: 'enabled',                name: 'Enabled (spd on/off)',                                 type: 'bool' },
     { key: 'multiplier',             name: 'Speed multiplier (1.0 = off, max 10.0)',               type: 'number', min: 1, max: 10, step: 0.1 },
-    { key: 'rampMs',                 name: 'Smooth ramp 1.0 → multiplier (ms)',                    type: 'number', min: 0, max: 5000, step: 50 },
     { key: 'autoDisableInCombat',    name: 'Auto-disable in combat',                               type: 'bool' },
     { key: 'showIndicator',          name: 'Show buff icon when active',                           type: 'bool' },
     { key: 'indicatorAbnormalityId', name: 'Abnormality ID for the indicator',                     type: 'number', min: 1,    max: 9999999, step: 1 },

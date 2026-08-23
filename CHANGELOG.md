@@ -1,5 +1,16 @@
 # Speedhack — Changelog
 
+## 1.2 (2026-08-23)
+
+### Removed
+- Speed ramp — multiplier applies instantly when you turn it on
+
+### Added
+- GUI remembers the last window position and size
+- GUI can be resized
+
+---
+
 ## 1.1 (2026-08-23)
 
 ### Changed

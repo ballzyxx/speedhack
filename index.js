@@ -14,7 +14,6 @@
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
  *   - Per-field speed overrides (walk/run/mount/swim)
- *   - Smooth ramp 1.0 → multiplier on enable
  *   - AHK hotkey (toggle / hold)
  *   - Item-use trigger
  *   - Auto-disable in combat (opt-in)
@@ -29,7 +28,6 @@
  *   spd mult <number>         → set multiplier (1..10)
  *   spd walk|run|mount|swim <n|off>  → per-field speed override
  *   spd preset <name>         → walk | jog | sprint | dash | yeet
- *   spd ramp <0..5000>        → smooth ramp duration
  *   spd combat                → toggle auto-disable in combat
  *   spd ind [id]              → toggle indicator, or set abnormality id
  *   spd item <id>             → set trigger item id (0 disables)
@@ -61,9 +59,10 @@ module.exports = function Speedhack(mod) {
     let ahkProc = null;
     let hotkeyHeldOn = false;
     let lastHotkeyAt = 0;
-    let rampStartedAt = 0;
     let uiWindow = null;
     let uiHotkeyRegistered = false;
+    let uiSaveTimer = null;
+    let uiGeometryReady = false;
     // Cache of the last server-broadcast move-type values, so on disable we
     // can replay them at 1.0x and the server believes our base speed again.
     let lastMoveType = null;
@@ -80,6 +79,13 @@ module.exports = function Speedhack(mod) {
 
     const log = (s) => mod.command.message(`[spd] ${s}`);
     const RUNTIME_CACHE_PATH = path.join(__dirname, 'runtime-cache.json');
+    const FACTORY_RESET_FLAG = path.join(__dirname, '.factory-reset');
+    const LOCAL_CACHE_FILES = [
+        'runtime-cache.json',
+        'last-disconnect.json',
+        path.join('ahk', 'hotkey.runtime.ahk'),
+        path.join('ahk', 'hotkey.ipc'),
+    ];
 
     function jsonReplacer(_k, v) {
         return typeof v === 'bigint' ? { __bi: v.toString() } : v;
@@ -141,29 +147,45 @@ module.exports = function Speedhack(mod) {
         }
     }
 
+    function wipeLocalCaches() {
+        for (const name of LOCAL_CACHE_FILES) {
+            try { fs.unlinkSync(path.join(__dirname, name)); } catch (_) {}
+        }
+        lastMoveType = null;
+        lastStatUpdate = null;
+        liveHp = null;
+        liveMaxHp = null;
+    }
+
+    function applyFactorySettings() {
+        const migrate = require('./settings_migrator');
+        const fresh = migrate(0, {});
+        for (const k of Object.keys(cfg)) delete cfg[k];
+        Object.assign(cfg, fresh);
+        wipeLocalCaches();
+        try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+    }
+
+    try {
+        if (fs.existsSync(FACTORY_RESET_FLAG)) {
+            applyFactorySettings();
+            try { fs.unlinkSync(FACTORY_RESET_FLAG); } catch (_) {}
+        }
+    } catch (_) {}
+    delete cfg.rampMs;
+
     const clampMultiplier = (n) => {
         const v = Number(n);
         if (!Number.isFinite(v)) return MIN_MULTIPLIER;
         return Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, v));
     };
 
-    // ----- multiplier resolution -----
-    // Compute the multiplier we apply to a packet right now. Honors the ramp
-    // and the auto-disable-in-combat safety. Returns 1.0 when off.
+    // Compute the multiplier we apply to a packet right now.
+    // Returns 1.0 when off or (optionally) in combat.
     function effectiveMultiplier() {
         if (!cfg.enabled) return 1.0;
         if (cfg.autoDisableInCombat && inCombat) return 1.0;
-
-        const target = clampMultiplier(cfg.multiplier);
-        const rampMs = Number(cfg.rampMs) || 0;
-        if (rampMs > 0 && rampStartedAt > 0) {
-            const elapsed = Date.now() - rampStartedAt;
-            if (elapsed < rampMs) {
-                const t = elapsed / rampMs;
-                return 1.0 + (target - 1.0) * t;
-            }
-        }
-        return target;
+        return clampMultiplier(cfg.multiplier);
     }
 
     // ----- speed packet rewriters -----
@@ -444,7 +466,6 @@ module.exports = function Speedhack(mod) {
         if (cfg.enabled === on) { applyIndicator(on); return; }
         cfg.enabled = on;
         applyIndicator(on);
-        rampStartedAt = on ? Date.now() : 0;
         // Replay cached move so the server picks up the new multiplier
         // immediately instead of waiting for natural broadcast.
         replayCachedMoveAt(on ? undefined : 1.0);
@@ -457,7 +478,6 @@ module.exports = function Speedhack(mod) {
         const presets = cfg.presets || {};
         if (!presets[name]) return false;
         cfg.multiplier = clampMultiplier(presets[name]);
-        rampStartedAt = Date.now();
         if (cfg.enabled) replayCachedMoveAt();
         broadcastUiState();
         return true;
@@ -605,7 +625,7 @@ module.exports = function Speedhack(mod) {
         if (sub === 's') {
             const fm = cfg.fieldMultipliers || {};
             const fmt = (v) => (v === null || v === undefined) ? '(master)' : v;
-            log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} ramp=${cfg.rampMs}ms combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
+            log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
             log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
@@ -619,7 +639,6 @@ module.exports = function Speedhack(mod) {
                 return log(`usage: spd mult <${MIN_MULTIPLIER}..${MAX_MULTIPLIER}>`);
             }
             cfg.multiplier = v;
-            rampStartedAt = Date.now();
             if (cfg.enabled) replayCachedMoveAt();
             broadcastUiState();
             return log(`multiplier=${v}`);
@@ -656,13 +675,6 @@ module.exports = function Speedhack(mod) {
                 return log(`unknown preset "${name}". try: ${Object.keys(cfg.presets || {}).join(' | ')}`);
             }
             return log(`preset=${name} multiplier=${cfg.multiplier}`);
-        }
-
-        if (sub === 'ramp') {
-            const ms = parseInt(args[1], 10);
-            if (isNaN(ms) || ms < 0 || ms > 5000) return log('usage: spd ramp <0..5000>');
-            cfg.rampMs = ms;
-            return log(`rampMs=${ms}`);
         }
 
         if (sub === 'combat') {
@@ -708,6 +720,12 @@ module.exports = function Speedhack(mod) {
         }
         if (sub === 'reloadhk') { startAhk(); return; }
         if (sub === 'ui')       { openUi(); return; }
+        if (sub === 'reset') {
+            applyFactorySettings();
+            stopAhk();
+            broadcastUiState();
+            return log('Settings reset to first-install defaults.');
+        }
 
         if (sub === 'reload') {
             // Re-read config.json from disk without restarting the toolbox.
@@ -729,7 +747,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | ramp <ms> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | reload');
+        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | reload');
     });
 
     // ===== GUI window =====
@@ -750,6 +768,67 @@ module.exports = function Speedhack(mod) {
         uiHotkeyRegistered = false;
     }
 
+    const UI_MIN_W = 400;
+    const UI_MIN_H = 480;
+    const UI_DEFAULT_W = 540;
+    const UI_DEFAULT_H = 920;
+
+    function persistUiGeometry() {
+        if (!uiGeometryReady) return;
+        if (!uiWindow || uiWindow.isDestroyed()) return;
+        const bounds = uiWindow.getBounds();
+        if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return;
+        cfg.uiX = bounds.x;
+        cfg.uiY = bounds.y;
+        if (bounds.width >= UI_MIN_W && bounds.height >= UI_MIN_H) {
+            cfg.uiWidth = bounds.width;
+            cfg.uiHeight = bounds.height;
+        }
+        try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+    }
+
+    function schedulePersistUiGeometry() {
+        if (!uiGeometryReady) return;
+        if (uiSaveTimer) {
+            try { mod.clearTimeout(uiSaveTimer); } catch (_) {}
+        }
+        uiSaveTimer = mod.setTimeout(() => {
+            uiSaveTimer = null;
+            persistUiGeometry();
+        }, 250);
+    }
+
+    function savedUiBounds() {
+        const bounds = {
+            width: Math.max(UI_MIN_W, Number(cfg.uiWidth) || UI_DEFAULT_W),
+            height: Math.max(UI_MIN_H, Number(cfg.uiHeight) || UI_DEFAULT_H),
+        };
+        if (Number.isFinite(cfg.uiX) && Number.isFinite(cfg.uiY)) {
+            bounds.x = Math.round(cfg.uiX);
+            bounds.y = Math.round(cfg.uiY);
+        }
+        return bounds;
+    }
+
+    function applySavedUiBounds(win) {
+        if (!win || win.isDestroyed()) return;
+        let bounds = savedUiBounds();
+        const screen = electronMod && electronMod.screen;
+        if (screen && bounds.x !== undefined) {
+            const onScreen = screen.getAllDisplays().some((display) => {
+                const area = display.workArea;
+                return bounds.x < area.x + area.width - 80
+                    && bounds.y < area.y + area.height - 80
+                    && bounds.x + bounds.width > area.x + 80
+                    && bounds.y + bounds.height > area.y + 80;
+            });
+            if (!onScreen) {
+                bounds = { width: bounds.width, height: bounds.height };
+            }
+        }
+        try { win.setBounds(bounds); } catch (_) {}
+    }
+
     function toggleUi() {
         if (uiWindow && !uiWindow.isDestroyed()) closeUi();
         else openUi();
@@ -763,14 +842,16 @@ module.exports = function Speedhack(mod) {
         if (uiWindow && !uiWindow.isDestroyed()) { uiWindow.focus(); return; }
 
         const { BrowserWindow, ipcMain } = electronMod;
-        uiWindow = new BrowserWindow({
-            width: 540,
-            height: 920,
-            useContentSize: true,
-            resizable: false,
-            minimizable: false,
-            maximizable: false,
-            fullscreenable: false,
+        uiGeometryReady = false;
+        const saved = savedUiBounds();
+        const winOpts = {
+            width: saved.width,
+            height: saved.height,
+            minWidth: UI_MIN_W,
+            minHeight: UI_MIN_H,
+            resizable: true,
+            maximizable: true,
+            thickFrame: true,
             show: false,
             alwaysOnTop: true,
             skipTaskbar: false,
@@ -781,10 +862,25 @@ module.exports = function Speedhack(mod) {
                 contextIsolation: false,
                 sandbox: false,
             },
-        });
+        };
+        if (saved.x !== undefined) {
+            winOpts.x = saved.x;
+            winOpts.y = saved.y;
+        }
+        uiWindow = new BrowserWindow(winOpts);
+        try {
+            uiWindow.setResizable(true);
+            uiWindow.setMaximizable(true);
+            uiWindow.setMinimumSize(UI_MIN_W, UI_MIN_H);
+        } catch (_) {}
+        applySavedUiBounds(uiWindow);
         uiWindow.removeMenu();
         uiWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
-        uiWindow.once('ready-to-show', () => uiWindow.show());
+        uiWindow.once('ready-to-show', () => {
+            applySavedUiBounds(uiWindow);
+            uiWindow.show();
+            uiGeometryReady = true;
+        });
 
         const onRequest = () => {
             if (uiWindow && !uiWindow.isDestroyed()) {
@@ -794,7 +890,7 @@ module.exports = function Speedhack(mod) {
         const onSave = (_evt, incoming) => {
             if (!incoming || typeof incoming !== 'object') return;
             const knownKeys = [
-                'enabled', 'multiplier', 'rampMs', 'autoDisableInCombat',
+                'enabled', 'multiplier', 'autoDisableInCombat',
                 'showIndicator', 'indicatorAbnormalityId', 'triggerItemId',
                 'hotkey', 'hotkeyMode', 'ahkPath',
             ];
@@ -822,7 +918,6 @@ module.exports = function Speedhack(mod) {
         const onMult = (_evt, v) => {
             const n = clampMultiplier(v);
             cfg.multiplier = n;
-            rampStartedAt = Date.now();
             if (cfg.enabled) replayCachedMoveAt();
             broadcastUiState();
         };
@@ -834,7 +929,16 @@ module.exports = function Speedhack(mod) {
         ipcMain.on('spd-preset',          onPreset);
         ipcMain.on('spd-mult',            onMult);
 
+        uiWindow.on('move', schedulePersistUiGeometry);
+        uiWindow.on('moved', schedulePersistUiGeometry);
+        uiWindow.on('resize', schedulePersistUiGeometry);
+        uiWindow.on('close', () => persistUiGeometry());
         uiWindow.on('closed', () => {
+            if (uiSaveTimer) {
+                try { mod.clearTimeout(uiSaveTimer); } catch (_) {}
+                uiSaveTimer = null;
+            }
+            uiGeometryReady = false;
             ipcMain.removeListener('spd-request-config', onRequest);
             ipcMain.removeListener('spd-save',            onSave);
             ipcMain.removeListener('spd-toggle',          onToggle);
@@ -847,6 +951,7 @@ module.exports = function Speedhack(mod) {
 
     function closeUi() {
         if (uiWindow && !uiWindow.isDestroyed()) {
+            persistUiGeometry();
             try { uiWindow.close(); } catch (_) {}
         }
         uiWindow = null;

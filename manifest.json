@@ -1,11 +1,11 @@
 {
     "files": {
-        "CHANGELOG.md": "d0aa3d8fc7467a6ebb40d988d2625dbb871b054b4dee9c60d734ff6d46582a3c",
+        "CHANGELOG.md": "8eb62c0fe6dccc7891213d193fe28a3c31b3f2e13f51a206605056fdac5f9962",
         "ahk/hotkey.template.ahk": "dda382750dd4435d8584a51728724be3e94e0e32d49c686291d2915442e66647",
-        "index.js": "08fb88da7492a4be6df10f6a04e79705a3672a077e65163da4b71102f0eae601",
-        "module.json": "74e99481fb57f34679207c9c602ae911e0b2aa9f3300062af1ca380716234d0e",
-        "settings_migrator.js": "78baeab6f4e24d0e5fe83a1c1012c9127f74e3a4d00a7cf02e062bdd76721d08",
-        "settings_structure.js": "29154633c8a72f4fd70917045b8247c9f65bf849278976044276afae80fb8456",
-        "ui/index.html": "32a038a721d19ffc18deb14758654ed5c3bd39672e52266f80119a53ba7c5d67"
+        "index.js": "058f9f9fc9dfcd4a54fbb7ad33a57ac57090eb899fc8b24d2bf5b2172d5e2e55",
+        "module.json": "21d98a1500d05b7d2dd8e064075680c2a04c38fb834386cc01c1527c9f47e145",
+        "settings_migrator.js": "596c5a23a8b455d47c34b5121fc99ebd2068b19166124be88e0b104eacc9dde9",
+        "settings_structure.js": "3af16a00ea08979e5f0138ddbc179cf0c5f715c01c78645f7d62c74e04a54f14",
+        "ui/index.html": "1b6ec945eaf85cd7bde7c0025fd4820311877dd48c9c1d7c6f48f4fd90a2f656"
     }
 }

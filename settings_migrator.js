@@ -11,7 +11,6 @@ module.exports = function migrate(oldVersion, oldSettings) {
             mountSpeed: null,
             swimSpeed:  null,
         },
-        rampMs: 200,
         autoDisableInCombat: false,
         showIndicator: true,
         indicatorAbnormalityId: 4620,
@@ -19,6 +18,10 @@ module.exports = function migrate(oldVersion, oldSettings) {
         hotkey: '',
         hotkeyMode: 'toggle',
         ahkPath: '%ProgramFiles%\\AutoHotkey\\v2\\AutoHotkey64.exe',
+        uiX: null,
+        uiY: null,
+        uiWidth: 540,
+        uiHeight: 920,
         presets: {
             walk:   1.5,
             jog:    2.5,
@@ -28,6 +31,7 @@ module.exports = function migrate(oldVersion, oldSettings) {
         },
     };
     const merged = Object.assign({}, defaults, oldSettings || {});
+    delete merged.rampMs;
     merged.presets = Object.assign({}, defaults.presets, (oldSettings && oldSettings.presets) || {});
     merged.fieldMultipliers = Object.assign({}, defaults.fieldMultipliers, (oldSettings && oldSettings.fieldMultipliers) || {});
     return merged;

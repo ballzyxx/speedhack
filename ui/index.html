@@ -19,13 +19,15 @@
     * { box-sizing: border-box; }
     html, body {
         margin: 0; padding: 0;
+        height: 100%;
         font-family: 'Segoe UI', Roboto, sans-serif;
         font-size: 13px;
         background: var(--bg);
         color: var(--text);
         user-select: none;
+        overflow: auto;
     }
-    .wrap { padding: 14px; }
+    .wrap { padding: 14px; min-height: 100%; box-sizing: border-box; }
     h1 {
         margin: 0 0 12px 0;
         font-size: 16px;
@@ -118,7 +120,7 @@
     input[type="text"] { width: 130px; text-align: left; }
     input:focus { outline: none; border-color: var(--accent); }
     .slider-row { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    input[type="range"] { width: 110px; accent-color: var(--accent); }
+    input[type="range"] { flex: 1; min-width: 80px; accent-color: var(--accent); }
     select {
         background: var(--panel-2);
         border: 1px solid var(--border);
@@ -193,10 +195,6 @@
             <option value="dash">Dash — 6x</option>
             <option value="yeet">Yeet — 10x (max)</option>
         </select>
-    </div>
-    <div class="row">
-        <div class="label">Ramp (ms)<small>Smoothly accelerate from 1.0 → multiplier. 0 = instant.</small></div>
-        <input id="n_rampMs" type="number" min="0" max="5000" step="50" data-key="rampMs">
     </div>
 </div>
 
