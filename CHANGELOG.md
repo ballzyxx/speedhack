@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.1 (2026-08-23)
+
+GitHub username is now ballzyxx. Auto-update URLs follow that.
+
+---
+
 ## 2.0 (2026-08-23)
 
 Current release.
