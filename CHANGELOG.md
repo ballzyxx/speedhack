@@ -1,5 +1,12 @@
 # Speedhack — Changelog
 
+## 2.2 (2026-08-23)
+
+### Fixed
+- Auto-update now downloads from jsDelivr so GitHub's stale `/main/` cache cannot break the hash check
+
+---
+
 ## 2.1 (2026-08-23)
 
 ### Fixed
