@@ -1,5 +1,12 @@
 # Speedhack — Changelog
 
+## 2.1 (2026-08-23)
+
+### Fixed
+- Auto-update hash mismatch on `module.json` (Windows line endings vs GitHub)
+
+---
+
 ## 2.0 (2026-08-23)
 
 Renumbered to 2.0.

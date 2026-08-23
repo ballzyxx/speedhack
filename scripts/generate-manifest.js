@@ -21,7 +21,10 @@ const FILES = [
 ];
 
 function sha256(filePath) {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    const raw = fs.readFileSync(filePath);
+    // GitHub raw serves LF. Hash those bytes so Toolbox auto-update matches.
+    const normalized = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n').replace(/\r/g, '\n'), 'utf8');
+    return crypto.createHash('sha256').update(normalized).digest('hex');
 }
 
 const files = {};
