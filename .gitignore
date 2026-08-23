@@ -1,0 +1,8 @@
+config.json
+module.config.json
+runtime-cache.json
+last-disconnect.json
+ahk/hotkey.runtime.ahk
+ahk/hotkey.ipc
+scripts/*
+!scripts/generate-manifest.js
