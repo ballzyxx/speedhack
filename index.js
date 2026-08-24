@@ -11,6 +11,9 @@
  * to it (because we modified what the server told us), so movement is fully
  * authoritative — no rubber-banding.
  *
+ * Asura: 2.0x on the client, legal runSpeed steps to the server, and a
+ * swing catch-up so hits still land. Agaia: raw 2.0x, no clamp, no catch-up.
+ *
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
  *   - Per-field speed overrides (walk/run/mount/swim)
@@ -36,6 +39,7 @@
  *   spd reloadhk              → restart AHK watcher
  *   spd ui                    → open the GUI (also Ctrl+Shift+S)
  *   spd reload                → re-read config.json from disk
+ *   spd safe [auto|on|off]    → Asura location-forge (default auto)
  */
 
 const fs = require('fs');
@@ -48,6 +52,18 @@ try { electronMod = require('electron'); } catch (_) { /* unavailable in headles
 const MAX_MULTIPLIER = 10.0;
 const MIN_MULTIPLIER = 1.0;
 const INT16_MAX = 32767;
+const DEFAULT_FORGE_BURST_MS = 1800;
+const DEFAULT_FORGE_QUIET_MS = 2200;
+const FORGE_SLACK = 1.0;
+const FORGE_BUDGET_CAP_MS = 150;
+const SKILL_CATCHUP_COOLDOWN_MS = 500;
+const SKILL_START_PACKETS = [
+    'C_START_SKILL',
+    'C_START_TARGETED_SKILL',
+    'C_START_COMBO_INSTANT_SKILL',
+    'C_START_INSTANCE_SKILL',
+    'C_START_INSTANCE_SKILL_EX',
+];
 
 module.exports = function Speedhack(mod) {
     const cfg = mod.settings;
@@ -74,6 +90,29 @@ module.exports = function Speedhack(mod) {
     // connection — a stale S_PLAYER_STAT_UPDATE (null fields, old HP, etc.)
     // crashes the client or drops the socket as soon as you enter the world.
     let statsFromThisConnection = false;
+    let lastOutLoc = null;
+    let lastForgeType = 0;
+    let lastSentWall = 0;
+    let moveBudget = 0;
+    let budgetAt = 0;
+    let lastLocPacket = null;
+    let lastSkillCatchupAt = 0;
+    let mounted = false;
+    let lastMountPacket = null;
+    let replayRetryTimer = null;
+    let locomotionRefreshPending = false;
+    let serverRunSpeed = 192;
+    const forgeStats = {
+        packets: 0,
+        clamped: 0,
+        lastType: 0,
+        lastDt: 0,
+        lastDxy: 0,
+        lastMax: 0,
+        maxDxy: 0,
+        totalDxy: 0,
+        lastSkillGap: 0,
+    };
     const diag = {
         lastReplayAt: 0,
         lastReplayErr: null,
@@ -178,6 +217,10 @@ module.exports = function Speedhack(mod) {
         }
     } catch (_) {}
     delete cfg.rampMs;
+    if (cfg.safeMode !== 'on' && cfg.safeMode !== 'off' && cfg.safeMode !== 'auto') cfg.safeMode = 'auto';
+    if (!cfg.hotkey || !String(cfg.hotkey).trim()) cfg.hotkey = '-';
+    cfg.forgeBurstMs = DEFAULT_FORGE_BURST_MS;
+    cfg.forgeQuietMs = DEFAULT_FORGE_QUIET_MS;
 
     const clampMultiplier = (n) => {
         const v = Number(n);
@@ -256,28 +299,261 @@ module.exports = function Speedhack(mod) {
         return changed;
     }
 
+    function currentServer() {
+        try {
+            const id = (mod.serverId != null)
+                ? mod.serverId
+                : (mod.game && mod.game.me && mod.game.me.serverId);
+            const list = mod.serverList
+                || (mod.connection && mod.connection.metadata && mod.connection.metadata.serverList)
+                || {};
+            const entry = (id != null && list[id]) ? list[id] : {};
+            return { id, name: String(entry.name || entry.serverName || '') };
+        } catch (_) {
+            return { id: null, name: '' };
+        }
+    }
+
+    function isAsuraServer() {
+        const s = currentServer();
+        if (Number(s.id) === 500) return true;
+        return /asura/i.test(s.name);
+    }
+
+    function isAgaiaServer() {
+        const s = currentServer();
+        if (Number(s.id) === 2800) return true;
+        return /agaia|agais/i.test(s.name);
+    }
+
+    function safeModeActive() {
+        if (cfg.safeMode === 'on') return true;
+        if (cfg.safeMode === 'off') return false;
+        if (isAgaiaServer()) return false;
+        if (isAsuraServer()) return true;
+        // Unknown server: keep Asura measures so a missed name does not send raw 2x.
+        return true;
+    }
+
+    function cloneLoc(loc) {
+        if (!loc) return loc;
+        if (typeof loc.clone === 'function') return loc.clone();
+        return { x: loc.x, y: loc.y, z: loc.z };
+    }
+
+    function currentMeLoc() {
+        try {
+            if (mod.game && mod.game.me && mod.game.me.loc) return cloneLoc(mod.game.me.loc);
+        } catch (_) {}
+        return null;
+    }
+
+    function dist2d(a, b) {
+        if (!a || !b) return 0;
+        const dx = Number(a.x) - Number(b.x);
+        const dy = Number(a.y) - Number(b.y);
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function clampLoc2d(from, to, maxDist) {
+        if (!from || !to) return to;
+        const d = dist2d(from, to);
+        if (d <= maxDist || maxDist <= 0) return to;
+        const t = maxDist / d;
+        const loc = {
+            x: Number(from.x) + (Number(to.x) - Number(from.x)) * t,
+            y: Number(from.y) + (Number(to.y) - Number(from.y)) * t,
+            z: Number(from.z) + (Number(to.z) - Number(from.z)) * t,
+        };
+        if (typeof to.clone === 'function' && to.constructor) {
+            try {
+                const v = to.clone();
+                v.x = loc.x; v.y = loc.y; v.z = loc.z;
+                return v;
+            } catch (_) {}
+        }
+        return loc;
+    }
+
+    function cacheRealRunSpeed(event) {
+        const run = (Number(event.runSpeed) || 0) + (Number(event.runSpeedBonus) || 0);
+        if (run > 1) serverRunSpeed = run;
+    }
+
+    function realRunSpeed() {
+        return Math.max(1, serverRunSpeed || 192);
+    }
+
+    function resetForgeState() {
+        lastOutLoc = null;
+        lastForgeType = 0;
+        lastSentWall = 0;
+        moveBudget = 0;
+        budgetAt = 0;
+    }
+
+    function seedForgeLoc(loc) {
+        const now = Date.now();
+        lastOutLoc = loc ? cloneLoc(loc) : null;
+        lastSentWall = now;
+        moveBudget = 0;
+        budgetAt = loc ? now : 0;
+    }
+
+    function acceptForgedLoc(event, loc, type, now) {
+        event.loc = loc;
+        if (event.dest) event.dest = cloneLoc(loc);
+        lastOutLoc = cloneLoc(loc);
+        lastSentWall = now;
+        lastForgeType = type;
+    }
+
+    function takeMoveBudget(now) {
+        const elapsed = budgetAt ? Math.max(0, now - budgetAt) : 0;
+        budgetAt = now;
+        const speed = realRunSpeed();
+        const cap = speed * FORGE_BUDGET_CAP_MS / 1000;
+        moveBudget = Math.min(moveBudget + speed * elapsed / 1000 * FORGE_SLACK, cap);
+        return elapsed;
+    }
+
+    function rememberLocPacket(event) {
+        lastLocPacket = {
+            w: event.w,
+            lookDirection: event.lookDirection,
+            jumpDistance: event.jumpDistance,
+            inShuttle: event.inShuttle,
+            time: event.time,
+        };
+    }
+
+    // Instant hits: tell Asura you are at the swing loc, then let the
+    // skill through unchanged. Do not rewrite the skill backward (snap)
+    // and do not hold/drop it (broken casts).
+    function onOutgoingSkill(event) {
+        if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) return;
+        if (!event.loc) return;
+        if (!lastOutLoc) {
+            seedForgeLoc(event.loc);
+            return;
+        }
+        const gap = dist2d(lastOutLoc, event.loc);
+        forgeStats.lastSkillGap = Math.round(gap * 10) / 10;
+        if (gap < 20) return;
+        const now = Date.now();
+        if (now - lastSkillCatchupAt < SKILL_CATCHUP_COOLDOWN_MS) return;
+        lastSkillCatchupAt = now;
+        const prev = lastLocPacket || {};
+        try {
+            mod.send('C_PLAYER_LOCATION', 5, {
+                loc: event.loc,
+                w: event.w != null ? event.w : (prev.w || 0),
+                lookDirection: prev.lookDirection || 0,
+                dest: cloneLoc(event.loc),
+                type: 7,
+                jumpDistance: 0,
+                inShuttle: !!prev.inShuttle,
+                time: prev.time ? prev.time + Math.max(1, now - (lastSentWall || now)) : now,
+            });
+        } catch (_) {}
+        seedForgeLoc(event.loc);
+    }
+
+    // Keep the real run/walk type so you can actually move on foot.
+    // The server only gets legal runSpeed distance per real wall-clock
+    // time. dest is always pinned to loc so a 2x look-ahead cannot slip
+    // through. Jump/fall/stop use the same XY budget.
+    // Skills are not touched — holding them made casts fail.
+    function forgeOutgoingLocation(event) {
+        const now = Date.now();
+        const type = Number(event.type);
+        rememberLocPacket(event);
+
+        if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) {
+            seedForgeLoc(event.loc);
+            lastForgeType = type;
+            return false;
+        }
+
+        forgeStats.packets += 1;
+        forgeStats.lastType = type;
+
+        if (!lastOutLoc) {
+            const from = currentMeLoc();
+            if (from) lastOutLoc = from;
+        }
+        if (!budgetAt) budgetAt = now;
+
+        if (!lastOutLoc) {
+            acceptForgedLoc(event, event.loc, type, now);
+            return event.dest ? true : undefined;
+        }
+
+        const elapsed = takeMoveBudget(now);
+        const dxy = dist2d(lastOutLoc, event.loc);
+        forgeStats.lastDt = elapsed;
+        forgeStats.lastDxy = Math.round(dxy * 10) / 10;
+        forgeStats.lastMax = Math.round(moveBudget * 10) / 10;
+        if (dxy > forgeStats.maxDxy) forgeStats.maxDxy = Math.round(dxy * 10) / 10;
+
+        let loc = event.loc;
+        if (dxy > moveBudget) {
+            loc = clampLoc2d(lastOutLoc, event.loc, moveBudget);
+            forgeStats.clamped += 1;
+            forgeStats.totalDxy += moveBudget;
+            moveBudget = 0;
+        } else {
+            forgeStats.totalDxy += dxy;
+            moveBudget -= dxy;
+        }
+
+        acceptForgedLoc(event, loc, type, now);
+        return true;
+    }
+
     // ----- identity / combat tracking -----
     mod.hook('S_LOGIN', '*', (event) => {
         myGameId = event.gameId;
         inCombat = false;
+        resetForgeState();
+        mounted = false;
+        lastMountPacket = null;
+        locomotionRefreshPending = false;
+        if (replayRetryTimer) {
+            try { mod.clearTimeout(replayRetryTimer); } catch (_) {}
+            replayRetryTimer = null;
+        }
         // Stale packets from the last Toolbox session must not be injected
         // during login — that can crash the client or drop the connection.
         lastMoveType = null;
         lastStatUpdate = null;
+        serverRunSpeed = 192;
         liveHp = null;
         liveMaxHp = null;
         statsFromThisConnection = false;
+        forgeStats.packets = 0;
+        forgeStats.clamped = 0;
+        forgeStats.maxDxy = 0;
+        forgeStats.totalDxy = 0;
         // Always start off when you enter a character. Turn it on with - / spd.
         if (cfg.enabled) setEnabled(false, 'login');
+        const srv = currentServer();
+        const label = srv.name || srv.id || '?';
+        if (safeModeActive()) {
+            log(`server=${label} — Asura 2.0x + instant hits (location-forge on)`);
+        } else {
+            log(`server=${label} — Agaia 2.0x, no location-forge`);
+        }
     });
 
     mod.hook('S_SPAWN_ME', '*', (event) => {
         if (event.gameId) myGameId = event.gameId;
+        seedForgeLoc(event.loc);
         scheduleStartupIndicator();
     });
 
     mod.hook('S_USER_STATUS', '*', (event) => {
-        if (!myGameId || event.gameId !== myGameId) return;
+        if (!myGameId || !sameId(event.gameId, myGameId)) return;
         // status: 0 = idle, 1 = combat (per most patches). Handle the safe
         // boolean too in case the field is named differently.
         const wasCombat = inCombat;
@@ -313,12 +589,50 @@ module.exports = function Speedhack(mod) {
         }
     } catch (_) {}
 
+    try {
+        mod.hook('S_LOAD_TOPO', '*', (event) => {
+            if (event && event.loc) seedForgeLoc(event.loc);
+            else resetForgeState();
+        });
+    } catch (_) {}
+    try {
+        mod.hook('S_MOUNT_VEHICLE', '*', { filter: { fake: false } }, (event) => {
+            if (myGameId && sameId(event.gameId, myGameId)) {
+                mounted = true;
+                lastMountPacket = Object.assign({}, event);
+            }
+        });
+    } catch (_) {}
+    try {
+        mod.hook('S_UNMOUNT_VEHICLE', '*', { filter: { fake: false } }, (event) => {
+            if (myGameId && sameId(event.gameId, myGameId)) {
+                mounted = false;
+                lastMountPacket = null;
+            }
+        });
+    } catch (_) {}
+    try {
+        mod.hook('S_INSTANT_MOVE', '*', { filter: { fake: false } }, (event) => {
+            if (!myGameId || !sameId(event.gameId, myGameId) || !event.loc) return;
+            seedForgeLoc(event.loc);
+        });
+    } catch (_) {}
+
+    mod.hook('C_PLAYER_LOCATION', 5, { order: Infinity, filter: { fake: false } }, (event) => {
+        return forgeOutgoingLocation(event) ? true : undefined;
+    });
+    for (const name of SKILL_START_PACKETS) {
+        try {
+            mod.hook(name, '*', { order: -20, filter: { fake: false } }, onOutgoingSkill);
+        } catch (_) {}
+    }
+
     // ----- the actual speed hooks -----
     // S_USER_MOVETYPE is the primary signal: the server broadcasts your move
     // state and the new speed values whenever they change (login, mount,
     // stance change, etc.). We multiply the speed and forward.
-    mod.hook('S_USER_MOVETYPE', '*', (event) => {
-        if (!myGameId || event.gameId !== myGameId) {
+    mod.hook('S_USER_MOVETYPE', '*', { filter: { fake: false } }, (event) => {
+        if (!myGameId || !sameId(event.gameId, myGameId)) {
             // Not us — leave it alone (other players don't get sped up).
             return;
         }
@@ -338,16 +652,22 @@ module.exports = function Speedhack(mod) {
     // the real HP here so the replay can stamp the CURRENT HP onto the cached
     // packet instead of a stale value (that stale value was what snapped the
     // HP bar back to full).
-    mod.hook('S_PLAYER_STAT_UPDATE', '*', (event) => {
+    mod.hook('S_PLAYER_STAT_UPDATE', '*', { filter: { fake: false } }, (event) => {
         // No gameId on this packet — it's implicitly "me", so safe to
-        // always multiply.
+        // always multiply. fake:false so a toggle replay cannot overwrite
+        // lastStatUpdate / serverRunSpeed with already-boosted values.
         lastStatUpdate = Object.assign({}, event);
+        cacheRealRunSpeed(event);
         statsFromThisConnection = true;
         diag.lastStatPacketAt = Date.now();
         if (event.hp !== undefined)    liveHp = event.hp;
         if (event.maxHp !== undefined) liveMaxHp = event.maxHp;
         scheduleSaveRuntimeCache();
         const changed = multiplySpeedFields(event); // per-field speed
+        if (locomotionRefreshPending) {
+            locomotionRefreshPending = false;
+            mod.setTimeout(() => refreshClientLocomotion(), 0);
+        }
         return changed ? true : undefined;
     });
 
@@ -403,6 +723,14 @@ module.exports = function Speedhack(mod) {
                 swim: cfg.fieldMultipliers ? cfg.fieldMultipliers.swimSpeed : null,
             },
             inCombat,
+            safeMode: cfg.safeMode,
+            safeActive: safeModeActive(),
+            lastForgeType,
+            serverRunSpeed,
+            mounted,
+            forgeStats,
+            forgeBurstMs: cfg.forgeBurstMs,
+            forgeQuietMs: cfg.forgeQuietMs,
             diag,
         };
         try {
@@ -416,28 +744,157 @@ module.exports = function Speedhack(mod) {
         }
     }
 
+    function alreadyInWorld() {
+        try {
+            const g = mod.game;
+            if (!g || !g.me || !g.me.gameId) return false;
+            if (g.isInLoadingScreen) return false;
+            if (g.isIngame === false) return false;
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function canReplayStats() {
+        if (!lastStatUpdate || lastStatUpdate.runSpeed == null) return false;
+        if (statsFromThisConnection) return true;
+        // Toolbox reload mid-session: cache is this character and we are
+        // already in the world. Injecting at construct / login is still blocked.
+        if (!myGameId) grabGameId();
+        return !!(myGameId && alreadyInWorld());
+    }
+
+    function currentHeading() {
+        if (lastLocPacket && lastLocPacket.w != null) return lastLocPacket.w;
+        if (lastMoveType && lastMoveType.w != null) return lastMoveType.w;
+        try {
+            if (mod.game && mod.game.me && mod.game.me.w != null) return mod.game.me.w;
+        } catch (_) {}
+        return 0;
+    }
+
+    function currentMoveType() {
+        if (lastMoveType && lastMoveType.type != null) return Number(lastMoveType.type);
+        if (lastForgeType != null) return Number(lastForgeType);
+        return 7;
+    }
+
+    function isMountedNow() {
+        if (mounted) return true;
+        try {
+            if (mod.game && mod.game.me && mod.game.me.mounted) return true;
+        } catch (_) {}
+        return false;
+    }
+
+    function syncMountedFromGame() {
+        try {
+            const me = mod.game && mod.game.me;
+            if (!me) return;
+            if (me.mounted) mounted = true;
+            if (mounted && !lastMountPacket && myGameId && me.mountId) {
+                lastMountPacket = {
+                    gameId: myGameId,
+                    id: me.mountId,
+                    skill: me.mountSkill || 0,
+                    unk: false,
+                };
+            }
+        } catch (_) {}
+    }
+
+    function sendUserMoveType(type) {
+        if (!myGameId) return false;
+        const pkt = lastMoveType ? Object.assign({}, lastMoveType) : {};
+        pkt.gameId = myGameId;
+        pkt.w = currentHeading();
+        pkt.type = type;
+        try {
+            mod.send('S_USER_MOVETYPE', '*', pkt);
+            return true;
+        } catch (_) {
+            try {
+                mod.send('S_USER_MOVETYPE', 1, pkt);
+                return true;
+            } catch (e) {
+                diag.lastReplayErr = `MOVETYPE: ${e.message}`;
+                log(`replay MOVETYPE failed: ${e.message}`);
+                return false;
+            }
+        }
+    }
+
+    function sendMountRefresh() {
+        if (!myGameId || !lastMountPacket) return false;
+        const pkt = Object.assign({}, lastMountPacket, { gameId: myGameId });
+        try {
+            mod.send('S_MOUNT_VEHICLE', '*', pkt);
+            return true;
+        } catch (_) {
+            try {
+                mod.send('S_MOUNT_VEHICLE', 2, pkt);
+                return true;
+            } catch (e) {
+                diag.lastReplayErr = `MOUNT: ${e.message}`;
+                return false;
+            }
+        }
+    }
+
+    // The client stores locomotion separately from the character sheet.
+    // Replaying STAT alone updates the number; walk/run stay at the old
+    // speed until a move-type change (mount/dismount). Do that refresh here
+    // so on/off does not require remounting.
+    function refreshClientLocomotion() {
+        syncMountedFromGame();
+        if (isMountedNow() && sendMountRefresh()) return;
+        const type = currentMoveType();
+        const alt = type === 0 ? 7 : 0;
+        sendUserMoveType(alt);
+        sendUserMoveType(type);
+    }
+
+    function sendStatReplay(forceMultiplier) {
+        if (!lastStatUpdate || lastStatUpdate.runSpeed == null) return false;
+        const pkt = Object.assign({}, lastStatUpdate);
+        if (liveHp !== null && pkt.hp !== undefined) pkt.hp = liveHp;
+        if (liveMaxHp !== null && pkt.maxHp !== undefined) pkt.maxHp = liveMaxHp;
+        multiplySpeedFields(pkt, forceMultiplier);
+        try {
+            mod.send('S_PLAYER_STAT_UPDATE', '*', pkt);
+            return true;
+        } catch (e) {
+            diag.lastReplayErr = `STAT: ${e.message}`;
+            log(`replay STAT failed: ${e.message}`);
+            return false;
+        }
+    }
+
+    function scheduleReplayRetry(forceMultiplier) {
+        if (replayRetryTimer) return;
+        replayRetryTimer = mod.setTimeout(() => {
+            replayRetryTimer = null;
+            if (!lastStatUpdate || lastStatUpdate.runSpeed == null) return;
+            replayCachedMoveAt(forceMultiplier);
+        }, 400);
+    }
+
     function replayCachedMoveAt(forceMultiplier) {
         diag.lastReplayAt = Date.now();
         diag.lastReplayErr = null;
-        if (!statsFromThisConnection) return;
-        if (lastMoveType) {
-            const pkt = Object.assign({}, lastMoveType);
-            multiplySpeedFields(pkt, forceMultiplier);
-            try { mod.send('S_USER_MOVETYPE', '*', pkt); } catch (e) {
-                diag.lastReplayErr = `MOVETYPE: ${e.message}`;
-                log(`replay MOVETYPE failed: ${e.message}`);
-            }
+        grabGameId();
+        syncMountedFromGame();
+        if (!canReplayStats()) {
+            locomotionRefreshPending = true;
+            scheduleReplayRetry(forceMultiplier);
+            return;
         }
-        if (lastStatUpdate) {
-            const pkt = Object.assign({}, lastStatUpdate);
-            if (liveHp !== null && pkt.hp !== undefined) pkt.hp = liveHp;
-            if (liveMaxHp !== null && pkt.maxHp !== undefined) pkt.maxHp = liveMaxHp;
-            multiplySpeedFields(pkt, forceMultiplier);
-            try { mod.send('S_PLAYER_STAT_UPDATE', '*', pkt); } catch (e) {
-                diag.lastReplayErr = `STAT: ${e.message}`;
-                log(`replay STAT failed: ${e.message}`);
-            }
-        }
+        // STAT first so locomotion rebuilds from the new speeds, not the old ones.
+        sendStatReplay(forceMultiplier);
+        refreshClientLocomotion();
+        sendStatReplay(forceMultiplier);
+        locomotionRefreshPending = false;
     }
 
     // ----- indicator -----
@@ -478,20 +935,19 @@ module.exports = function Speedhack(mod) {
 
     // ----- enable/disable chokepoint -----
     function setEnabled(on, source) {
-        if (cfg.enabled === on) {
-            if (source !== 'login') applyIndicator(on);
-            return;
-        }
+        const changed = cfg.enabled !== on;
         cfg.enabled = on;
+        if (on && !lastOutLoc) seedForgeLoc(currentMeLoc());
         if (source !== 'login') {
             applyIndicator(on);
-            // Replay cached move so the client picks up the new multiplier
-            // immediately instead of waiting for natural broadcast.
+            locomotionRefreshPending = true;
+            // Replay STAT, then force the same locomotion rebuild that
+            // mount/dismount does, so on/off is visible without remounting.
             replayCachedMoveAt(on ? undefined : 1.0);
         }
         broadcastUiState();
         if (source && source.startsWith('hotkey/hold')) return;
-        log(`${on ? 'ON' : 'OFF'} (${source}) multiplier=${cfg.multiplier}`);
+        if (changed) log(`${on ? 'ON' : 'OFF'} (${source}) multiplier=${cfg.multiplier}`);
     }
 
     function applyPreset(name) {
@@ -645,8 +1101,10 @@ module.exports = function Speedhack(mod) {
         if (sub === 's') {
             const fm = cfg.fieldMultipliers || {};
             const fmt = (v) => (v === null || v === undefined) ? '(master)' : v;
+            const srv = currentServer();
             log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
             log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
+            log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} burst=${cfg.forgeBurstMs} quiet=${cfg.forgeQuietMs} server=${srv.name || srv.id || '?'}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
         }
@@ -738,6 +1196,31 @@ module.exports = function Speedhack(mod) {
             cfg.hotkeyMode = m;
             return log(`hotkeyMode=${m}`);
         }
+        if (sub === 'safe') {
+            const arg = (args[1] || '').toLowerCase();
+            if (!arg) {
+                const srv = currentServer();
+                return log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} burst=${cfg.forgeBurstMs} quiet=${cfg.forgeQuietMs} server=${srv.name || srv.id || '?'}`);
+            }
+            if (arg === 'auto' || arg === 'on' || arg === 'off') {
+                cfg.safeMode = arg;
+                broadcastUiState();
+                return log(`safeMode=${arg} active=${safeModeActive()}`);
+            }
+            if (arg === 'burst') {
+                const n = parseInt(args[2], 10);
+                if (!Number.isFinite(n) || n < 800 || n > 15000) return log('usage: spd safe burst <800..15000>');
+                cfg.forgeBurstMs = n;
+                return log(`forgeBurstMs=${n}`);
+            }
+            if (arg === 'quiet') {
+                const n = parseInt(args[2], 10);
+                if (!Number.isFinite(n) || n < 400 || n > 5000) return log('usage: spd safe quiet <400..5000>');
+                cfg.forgeQuietMs = n;
+                return log(`forgeQuietMs=${n}`);
+            }
+            return log('usage: spd safe [auto|on|off|burst <ms>|quiet <ms>]');
+        }
         if (sub === 'reloadhk') { startAhk(); return; }
         if (sub === 'ui')       { openUi(); return; }
         if (sub === 'reset') {
@@ -767,7 +1250,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | reload');
+        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | safe [auto|on|off] | reloadhk | ui | reload');
     });
 
     // ===== GUI window =====
@@ -912,7 +1395,7 @@ module.exports = function Speedhack(mod) {
             const knownKeys = [
                 'enabled', 'multiplier', 'autoDisableInCombat',
                 'showIndicator', 'indicatorAbnormalityId', 'triggerItemId',
-                'hotkey', 'hotkeyMode', 'ahkPath',
+                'hotkey', 'hotkeyMode', 'ahkPath', 'safeMode',
             ];
             for (const k of knownKeys) {
                 if (incoming[k] !== undefined && incoming[k] !== cfg[k]) cfg[k] = incoming[k];
@@ -979,8 +1462,13 @@ module.exports = function Speedhack(mod) {
 
     function broadcastUiState() {
         if (!uiWindow || uiWindow.isDestroyed()) return;
-        try { uiWindow.webContents.send('spd-state', { enabled: cfg.enabled, multiplier: cfg.multiplier }); }
-        catch (_) {}
+        try {
+            uiWindow.webContents.send('spd-state', {
+                enabled: cfg.enabled,
+                multiplier: cfg.multiplier,
+                safeMode: cfg.safeMode,
+            });
+        } catch (_) {}
     }
 
     // ===== boot =====
@@ -988,12 +1476,28 @@ module.exports = function Speedhack(mod) {
     registerUiHotkey();
     grabGameId();
     loadRuntimeCache();
-    // Do not inject cached stat/move packets or fake buffs here. NetworkMods
-    // construct the instant you enter the world; last session's STAT_UPDATE
-    // (often with null fields) will drop the client before S_LOGIN even runs.
+    syncMountedFromGame();
+    // Do not inject cached stat/move packets or fake buffs at construct time
+    // during login — a stale STAT_UPDATE drops the client. Mid-session reload
+    // is safe: we are already in the world with this character's cache.
+    if (alreadyInWorld() && lastStatUpdate && lastStatUpdate.runSpeed != null) {
+        statsFromThisConnection = true;
+        if (cfg.enabled) {
+            mod.setTimeout(() => {
+                if (!cfg.enabled) return;
+                replayCachedMoveAt();
+                applyIndicator(true);
+            }, 150);
+        }
+    }
 
     this.destructor = () => {
+        if (replayRetryTimer) {
+            try { mod.clearTimeout(replayRetryTimer); } catch (_) {}
+            replayRetryTimer = null;
+        }
         saveRuntimeCache();
+        resetForgeState();
         try { if (statsFromThisConnection) applyIndicator(false); } catch (_) {}
         try { replayCachedMoveAt(1.0); } catch (_) {}
         stopAhk();

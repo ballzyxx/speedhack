@@ -242,6 +242,14 @@
         <div class="label">Auto-disable in combat<small>Drops to 1.0 when you enter combat to avoid validators</small></div>
         <div id="t_autoDisableInCombat" class="toggle" data-key="autoDisableInCombat"></div>
     </div>
+    <div class="row">
+        <div class="label">Asura-safe movement<small>Auto = on for Asura (2.0x + instant hits), off for Agaia (raw 2.0x, no clamp).</small></div>
+        <select id="s_safeMode" data-key="safeMode">
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+        </select>
+    </div>
 </div>
 
 <div class="section-title">Indicator</div>
@@ -469,6 +477,7 @@
         if (state) {
             if (state.enabled !== undefined)    cfg.enabled = state.enabled;
             if (state.multiplier !== undefined) cfg.multiplier = state.multiplier;
+            if (state.safeMode !== undefined)   cfg.safeMode = state.safeMode;
         }
         refreshUi();
     });

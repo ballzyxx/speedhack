@@ -12,10 +12,13 @@ module.exports = function migrate(oldVersion, oldSettings) {
             swimSpeed:  null,
         },
         autoDisableInCombat: false,
+        safeMode: 'auto',
+        forgeBurstMs: 1800,
+        forgeQuietMs: 2200,
         showIndicator: true,
         indicatorAbnormalityId: 4620,
         triggerItemId: 0,
-        hotkey: '',
+        hotkey: '-',
         hotkeyMode: 'toggle',
         ahkPath: '%ProgramFiles%\\AutoHotkey\\v2\\AutoHotkey64.exe',
         uiX: null,
@@ -32,7 +35,10 @@ module.exports = function migrate(oldVersion, oldSettings) {
     };
     const merged = Object.assign({}, defaults, oldSettings || {});
     delete merged.rampMs;
+    delete merged.safeScoreLimit;
+    delete merged.safeCooldownMs;
     merged.presets = Object.assign({}, defaults.presets, (oldSettings && oldSettings.presets) || {});
     merged.fieldMultipliers = Object.assign({}, defaults.fieldMultipliers, (oldSettings && oldSettings.fieldMultipliers) || {});
+    if ((oldVersion || 0) < 4) merged.safeMode = 'auto';
     return merged;
 };
