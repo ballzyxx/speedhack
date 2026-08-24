@@ -105,11 +105,9 @@ module.exports = function Speedhack(mod) {
     let replayRetryTimer = null;
     let locomotionRefreshPending = false;
     let gatherActive = false;
-    let gatherSpeedMul = 1;
-    let gatherCollectionId = 0n;
+    let gatherStartedAt = 0;
+    let gatherOriginalMs = 0;
     let gatherPickendTimer = null;
-    let lastOwnAction = null;
-    let lastOwnActionAt = 0;
     let serverRunSpeed = 192;
     const forgeStats = {
         packets: 0,
@@ -744,87 +742,17 @@ module.exports = function Speedhack(mod) {
         return changed ? true : undefined;
     });
 
-    // Gathering: shortening S_COLLECTION_PICKSTART.duration only fills the
-    // progress bar. The character stays in the gather action until the
-    // server gets C_COLLECTION_PICKEND. Speed the gather animation and tell
-    // the server we finished at the fast time.
+    // Gathering: S_COLLECTION_PICKSTART.duration is only the client bar.
+    // Agaia/Asura still use neededPickTimePoint. Sending pick-end or
+    // S_ACTION_END early is "Gathering interrupted". Keep the bar fast,
+    // drop cancel pick-end from the sped bar, and let the server finish.
     function clearGatherState() {
         gatherActive = false;
-        gatherSpeedMul = 1;
-        gatherCollectionId = 0n;
-        lastOwnAction = null;
-        lastOwnActionAt = 0;
+        gatherStartedAt = 0;
+        gatherOriginalMs = 0;
         if (gatherPickendTimer) {
             try { mod.clearTimeout(gatherPickendTimer); } catch (_) {}
             gatherPickendTimer = null;
-        }
-    }
-
-    function applyGatherSpeedToAction(event, m) {
-        if (!event || !(m > 1)) return false;
-        let changed = false;
-        if (typeof event.speed === 'number' && Number.isFinite(event.speed)) {
-            event.speed = event.speed * m;
-            changed = true;
-        }
-        if (typeof event.projectileSpeed === 'number' && Number.isFinite(event.projectileSpeed)) {
-            event.projectileSpeed = event.projectileSpeed * m;
-            changed = true;
-        }
-        if (Array.isArray(event.animSeq)) {
-            for (const seq of event.animSeq) {
-                if (!seq || seq.duration == null) continue;
-                const isBig = typeof seq.duration === 'bigint';
-                const d = Number(seq.duration);
-                if (!Number.isFinite(d) || d <= 1) continue;
-                const next = Math.max(1, Math.round(d / m));
-                seq.duration = isBig ? BigInt(next) : next;
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
-    function sendGatherPickEnd() {
-        if (!gatherActive) return;
-        const unk = gatherCollectionId;
-        try {
-            mod.send('C_COLLECTION_PICKEND', '*', { unk, type: 0 });
-        } catch (_) {
-            try {
-                mod.send('C_COLLECTION_PICKEND', 1, { unk, type: 0 });
-            } catch (__) {}
-        }
-    }
-
-    function endGatherActionClient() {
-        if (!lastOwnAction || !myGameId) return;
-        const pkt = Object.assign({}, lastOwnAction);
-        pkt.gameId = myGameId;
-        pkt.type = 0;
-        try {
-            mod.send('S_ACTION_END', '*', pkt);
-        } catch (_) {
-            try {
-                mod.send('S_ACTION_END', 5, pkt);
-            } catch (__) {}
-        }
-    }
-
-    function replaySpedGatherAction() {
-        if (!lastOwnAction || !(gatherSpeedMul > 1)) return;
-        if (Date.now() - lastOwnActionAt > 800) return;
-        const pkt = Object.assign({}, lastOwnAction);
-        if (Array.isArray(lastOwnAction.animSeq)) {
-            pkt.animSeq = lastOwnAction.animSeq.map((s) => Object.assign({}, s));
-        }
-        applyGatherSpeedToAction(pkt, gatherSpeedMul);
-        try {
-            mod.send('S_ACTION_STAGE', '*', pkt);
-        } catch (_) {
-            try {
-                mod.send('S_ACTION_STAGE', 9, pkt);
-            } catch (__) {}
         }
     }
 
@@ -844,20 +772,33 @@ module.exports = function Speedhack(mod) {
             const next = Math.max(1, Math.round(ms / m));
             if (next >= ms) return;
             event.duration = isBig ? BigInt(next) : next;
-
             gatherActive = true;
-            gatherSpeedMul = m;
-            gatherCollectionId = event.collection != null ? event.collection : (event.unk != null ? event.unk : 0n);
-            replaySpedGatherAction();
+            gatherStartedAt = Date.now();
+            gatherOriginalMs = ms;
+            return true;
+        });
+    } catch (_) {}
+
+    try {
+        mod.hook('C_COLLECTION_PICKEND', '*', { filter: { fake: false } }, (event) => {
+            if (!gatherActive) return;
+            const t = Number(event.type);
+            // 0 = interrupted, 1 = cancelled. The sped bar makes the client
+            // send these when the animation ends; do not forward them.
+            if (t === 0 || t === 1) return false;
+            const remain = gatherOriginalMs - (Date.now() - gatherStartedAt);
+            if (remain <= 20) return;
+            const pkt = Object.assign({}, event);
             if (gatherPickendTimer) {
                 try { mod.clearTimeout(gatherPickendTimer); } catch (_) {}
             }
             gatherPickendTimer = mod.setTimeout(() => {
                 gatherPickendTimer = null;
-                sendGatherPickEnd();
-                endGatherActionClient();
-            }, next);
-            return true;
+                try { mod.send('C_COLLECTION_PICKEND', '*', pkt); } catch (_) {
+                    try { mod.send('C_COLLECTION_PICKEND', 1, pkt); } catch (__) {}
+                }
+            }, remain);
+            return false;
         });
     } catch (_) {}
 
@@ -866,19 +807,6 @@ module.exports = function Speedhack(mod) {
             const who = event.user != null ? event.user : event.gameId;
             if (!myGameId || !sameId(who, myGameId)) return;
             clearGatherState();
-        });
-    } catch (_) {}
-
-    try {
-        mod.hook('S_ACTION_STAGE', '*', { filter: { fake: false } }, (event) => {
-            if (!myGameId || !sameId(event.gameId, myGameId)) return;
-            lastOwnAction = Object.assign({}, event);
-            if (Array.isArray(event.animSeq)) {
-                lastOwnAction.animSeq = event.animSeq.map((s) => Object.assign({}, s));
-            }
-            lastOwnActionAt = Date.now();
-            if (!gatherActive) return;
-            return applyGatherSpeedToAction(event, gatherSpeedMul) ? true : undefined;
         });
     } catch (_) {}
 

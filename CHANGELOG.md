@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.41 (2026-08-24)
+
+### Fixed
+- Stopped sending an early gather cancel. That was the "Gathering interrupted" message. The bar can still be fast. The node finishes on the server timer so you get the items.
+
+---
 ## 2.40 (2026-08-24)
 
 ### Fixed
