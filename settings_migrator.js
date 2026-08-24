@@ -10,7 +10,6 @@ module.exports = function migrate(oldVersion, oldSettings) {
             runSpeed:   null,
             mountSpeed: null,
             swimSpeed:  null,
-            gatherSpeed: null,
         },
         autoDisableInCombat: false,
         safeMode: 'auto',

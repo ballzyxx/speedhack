@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.42 (2026-08-24)
+
+### Removed
+- Gathering speed. Node time is server-side and cannot be sped up from Toolbox.
+
+---
 ## 2.41 (2026-08-24)
 
 ### Fixed
