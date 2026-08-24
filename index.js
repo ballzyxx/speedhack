@@ -335,6 +335,23 @@ module.exports = function Speedhack(mod) {
         return true;
     }
 
+    function guiServerInfo() {
+        const s = currentServer();
+        let kind = 'unknown';
+        if (isAgaiaServer()) kind = 'agaia';
+        else if (isAsuraServer()) kind = 'asura';
+        const name = s.name
+            ? (s.id != null && s.id !== '' ? `${s.name} (${s.id})` : s.name)
+            : (s.id != null && s.id !== '' ? `Server ${s.id}` : 'Not logged in');
+        return {
+            name,
+            id: s.id == null || s.id === '' ? null : Number(s.id),
+            kind,
+            forge: safeModeActive(),
+            safeMode: cfg.safeMode,
+        };
+    }
+
     function cloneLoc(loc) {
         if (!loc) return loc;
         if (typeof loc.clone === 'function') return loc.clone();
@@ -544,6 +561,7 @@ module.exports = function Speedhack(mod) {
         } else {
             log(`server=${label} — Agaia 2.0x, no location-forge`);
         }
+        broadcastUiState();
     });
 
     mod.hook('S_SPAWN_ME', '*', (event) => {
@@ -1388,6 +1406,7 @@ module.exports = function Speedhack(mod) {
         const onRequest = () => {
             if (uiWindow && !uiWindow.isDestroyed()) {
                 uiWindow.webContents.send('spd-config', JSON.parse(JSON.stringify(cfg)));
+                broadcastUiState();
             }
         };
         const onSave = (_evt, incoming) => {
@@ -1408,6 +1427,7 @@ module.exports = function Speedhack(mod) {
                 if (cfg.enabled) replayCachedMoveAt();
             }
             try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+            if (incoming.safeMode !== undefined) broadcastUiState();
             if (incoming.hotkey !== undefined || incoming.hotkeyMode !== undefined || incoming.ahkPath !== undefined) {
                 startAhk();
             }
@@ -1467,6 +1487,7 @@ module.exports = function Speedhack(mod) {
                 enabled: cfg.enabled,
                 multiplier: cfg.multiplier,
                 safeMode: cfg.safeMode,
+                server: guiServerInfo(),
             });
         } catch (_) {}
     }

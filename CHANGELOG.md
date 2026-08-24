@@ -1,5 +1,12 @@
 # Speedhack — Changelog
 
+## 2.33 (2026-08-24)
+
+### Changed
+- GUI shows the server you are on (Asura / Agaia) and whether the clamp is active.
+- Safe movement keeps Auto on both servers; the GUI now shows the live ON/OFF so Agaia does not look like Asura clamp is on.
+
+---
 ## 2.32 (2026-08-24)
 
 ### Changed

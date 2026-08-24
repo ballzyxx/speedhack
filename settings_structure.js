@@ -9,7 +9,7 @@ module.exports = [
     { key: 'enabled',                name: 'Enabled (spd on/off)',                                 type: 'bool' },
     { key: 'multiplier',             name: 'Speed multiplier (1.0 = off, max 10.0)',               type: 'number', min: 1, max: 10, step: 0.1 },
     { key: 'autoDisableInCombat',    name: 'Auto-disable in combat',                               type: 'bool' },
-    { key: 'safeMode',               name: 'Asura-safe movement: "auto", "on", or "off"',          type: 'string' },
+    { key: 'safeMode',               name: 'Safe movement: "auto", "on", or "off" (auto = Asura on, Agaia off)', type: 'string' },
     { key: 'showIndicator',          name: 'Show buff icon when active',                           type: 'bool' },
     { key: 'indicatorAbnormalityId', name: 'Abnormality ID for the indicator',                     type: 'number', min: 1,    max: 9999999, step: 1 },
     { key: 'triggerItemId',          name: 'Trigger item ID (use item to toggle, 0 = disabled)',   type: 'number', min: 0,    max: 999999, step: 1 },
