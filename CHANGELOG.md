@@ -1,5 +1,29 @@
 # Speedhack — Changelog
 
+## 2.37 (2026-08-24)
+
+### Changed
+- Reverted the Asura faster NPC catch-up after a late kick. Clamp is legal 1.0x again. Agaia is unchanged.
+
+---
+## 2.36 (2026-08-24)
+
+### Changed
+- Asura NPC wait is shorter after you stop: one small 80-unit catch-up, then 1.5x walk-up. Running stays legal 1.0x so it does not send the 2.0x that kicked. Agaia is unchanged.
+
+---
+## 2.35 (2026-08-24)
+
+### Changed
+- Reverted the Asura no-delay test after it kicked. Auto on Asura clamps again. Agaia is unchanged.
+
+---
+## 2.34 (2026-08-24)
+
+### Changed
+- Asura-only no-delay test: auto no longer clamps locations, so NPC/hits match 2.0x. Agaia is unchanged. `/8 spd safe on` puts the clamp back.
+
+---
 ## 2.33 (2026-08-24)
 
 ### Changed
