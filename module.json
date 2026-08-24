@@ -1,11 +1,11 @@
 {
     "disableAutoUpdate": false,
     "name": "speedhack",
-    "version": "2.39",
+    "version": "2.40",
     "author": "ballzyxx",
     "description": "Move-speed multiplier with GUI, AHK hotkey, instant reload restore, per-field walk/run/mount/swim/gather overrides, and faster gathering",
     "servers": [
-        "https://cdn.jsdelivr.net/gh/ballzyxx/speedhack@v2.39/"
+        "https://cdn.jsdelivr.net/gh/ballzyxx/speedhack@v2.40/"
     ],
     "options": {
         "cliName": "Speedhack",

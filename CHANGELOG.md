@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.40 (2026-08-24)
+
+### Fixed
+- Gather 10x was only the progress bar. The character stayed in the gather animation until the server timer. Speedhack now also speeds the gather action and sends pick-end at the fast time so the node actually finishes.
+
+---
 ## 2.39 (2026-08-24)
 
 ### Added
