@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.39 (2026-08-24)
+
+### Added
+- Gathering uses the speedhack multiplier (2.0x = half node time). Override with `/8 spd gather <n|off>` or the Gather speed toggle in the GUI. Same on Agaia and Asura. Speedhack off = normal gather time.
+
+---
 ## 2.38 (2026-08-24)
 
 ### Fixed

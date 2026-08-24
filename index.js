@@ -16,7 +16,7 @@
  *
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
- *   - Per-field speed overrides (walk/run/mount/swim)
+ *   - Per-field speed overrides (walk/run/mount/swim/gather)
  *   - AHK hotkey (toggle / hold)
  *   - Item-use trigger
  *   - Auto-disable in combat (opt-in)
@@ -29,7 +29,7 @@
  *   spd s                     → status line
  *   spd on | off              → explicit on/off
  *   spd mult <number>         → set multiplier (1..10)
- *   spd walk|run|mount|swim <n|off>  → per-field speed override
+ *   spd walk|run|mount|swim|gather <n|off>  → per-field speed override
  *   spd preset <name>         → walk | jog | sprint | dash | yeet
  *   spd combat                → toggle auto-disable in combat
  *   spd ind [id]              → toggle indicator, or set abnormality id
@@ -262,6 +262,9 @@ module.exports = function Speedhack(mod) {
         mountSpeed:       'mountSpeed',
         // swim-family (best-guess; some patches don't carry it on these packets)
         swimSpeed:        'swimSpeed',
+        // gather-family (STAT on some patches; gather time is also S_COLLECTION_PICKSTART)
+        gatherSpeed:      'gatherSpeed',
+        gatheringSpeed:   'gatherSpeed',
     };
 
     // Resolve which multiplier applies to a given field, honoring per-field
@@ -734,6 +737,27 @@ module.exports = function Speedhack(mod) {
         return changed ? true : undefined;
     });
 
+    // Gathering: the server tells the client how long the node takes
+    // (S_COLLECTION_PICKSTART.duration, ms). Divide that by the gather
+    // multiplier so the animation and C_COLLECTION_PICKEND finish sooner.
+    // Same on Agaia and Asura. Speedhack off = vanilla gather time.
+    try {
+        mod.hook('S_COLLECTION_PICKSTART', '*', { filter: { fake: false } }, (event) => {
+            if (!myGameId || !sameId(event.user != null ? event.user : event.gameId, myGameId)) return;
+            const m = multiplierForField('gatherSpeed');
+            if (m <= 1.0) return;
+            const raw = event.duration;
+            if (raw == null) return;
+            const isBig = typeof raw === 'bigint';
+            const ms = Number(raw);
+            if (!Number.isFinite(ms) || ms <= 1) return;
+            const next = Math.max(1, Math.round(ms / m));
+            if (next >= ms) return;
+            event.duration = isBig ? BigInt(next) : next;
+            return true;
+        });
+    } catch (_) {}
+
     // Track real HP from incoming damage/heal so the replay never resurrects a
     // stale full-HP value. This packet is the authoritative current HP.
     mod.hook('S_CREATURE_CHANGE_HP', '*', (event) => {
@@ -784,6 +808,7 @@ module.exports = function Speedhack(mod) {
                 run: cfg.fieldMultipliers ? cfg.fieldMultipliers.runSpeed : null,
                 mount: cfg.fieldMultipliers ? cfg.fieldMultipliers.mountSpeed : null,
                 swim: cfg.fieldMultipliers ? cfg.fieldMultipliers.swimSpeed : null,
+                gather: cfg.fieldMultipliers ? cfg.fieldMultipliers.gatherSpeed : null,
             },
             inCombat,
             safeMode: cfg.safeMode,
@@ -1175,7 +1200,7 @@ module.exports = function Speedhack(mod) {
             const fmt = (v) => (v === null || v === undefined) ? '(master)' : v;
             const srv = currentServer();
             log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
-            log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
+            log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)} gather=${fmt(fm.gatherSpeed)}`);
             log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} burst=${cfg.forgeBurstMs} quiet=${cfg.forgeQuietMs} server=${srv.name || srv.id || '?'}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
@@ -1194,15 +1219,15 @@ module.exports = function Speedhack(mod) {
             return log(`multiplier=${v}`);
         }
 
-        // Per-field overrides: walk, run, mount, swim. Use "off" to clear.
-        // Examples: spd walk 1.5 | spd run 4 | spd mount off
-        if (sub === 'walk' || sub === 'run' || sub === 'mount' || sub === 'swim') {
+        // Per-field overrides: walk, run, mount, swim, gather. Use "off" to clear.
+        // Examples: spd walk 1.5 | spd run 4 | spd mount off | spd gather 4
+        if (sub === 'walk' || sub === 'run' || sub === 'mount' || sub === 'swim' || sub === 'gather') {
             const fieldKey = sub + 'Speed';
             cfg.fieldMultipliers = cfg.fieldMultipliers || {};
             const arg = (args[1] || '').toLowerCase();
             if (arg === 'off' || arg === 'null' || arg === '') {
                 cfg.fieldMultipliers[fieldKey] = null;
-                if (cfg.enabled) replayCachedMoveAt();
+                if (cfg.enabled && sub !== 'gather') replayCachedMoveAt();
                 return log(`${fieldKey}=null (uses master multiplier ${cfg.multiplier})`);
             }
             const v = parseFloat(arg);
@@ -1210,7 +1235,7 @@ module.exports = function Speedhack(mod) {
                 return log(`usage: spd ${sub} <${MIN_MULTIPLIER}..${MAX_MULTIPLIER}|off>`);
             }
             cfg.fieldMultipliers[fieldKey] = v;
-            if (cfg.enabled) replayCachedMoveAt();
+            if (cfg.enabled && sub !== 'gather') replayCachedMoveAt();
             return log(`${fieldKey}=${v}`);
         }
 
@@ -1322,7 +1347,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | safe [auto|on|off] | reloadhk | ui | reload');
+        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim|gather <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | safe [auto|on|off] | reloadhk | ui | reload');
     });
 
     // ===== GUI window =====
