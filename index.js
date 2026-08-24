@@ -11,8 +11,8 @@
  * to it (because we modified what the server told us), so movement is fully
  * authoritative — no rubber-banding.
  *
- * Asura: 2.0x on the client, legal runSpeed steps to the server, and a
- * swing catch-up so hits still land. Agaia: raw 2.0x, no clamp, no catch-up.
+ * Asura: 2.0x on the client, legal runSpeed steps to the server (wall-clock).
+ * Hits snap only if the gap is under 80. Agaia: raw 2.0x, no forge.
  *
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
@@ -57,6 +57,7 @@ const DEFAULT_FORGE_QUIET_MS = 2200;
 const FORGE_SLACK = 1.0;
 const FORGE_BUDGET_CAP_MS = 150;
 const SKILL_CATCHUP_COOLDOWN_MS = 500;
+const SKILL_SNAP_MAX = 80;
 const SKILL_START_PACKETS = [
     'C_START_SKILL',
     'C_START_TARGETED_SKILL',
@@ -112,9 +113,11 @@ module.exports = function Speedhack(mod) {
         lastDt: 0,
         lastDxy: 0,
         lastMax: 0,
+        lastAllowed: 0,
         maxDxy: 0,
         totalDxy: 0,
         lastSkillGap: 0,
+        lastInteractGap: 0,
     };
     const diag = {
         lastReplayAt: 0,
@@ -434,6 +437,7 @@ module.exports = function Speedhack(mod) {
         const speed = realRunSpeed();
         const cap = speed * FORGE_BUDGET_CAP_MS / 1000;
         moveBudget = Math.min(moveBudget + speed * elapsed / 1000 * FORGE_SLACK, cap);
+        forgeStats.lastAllowed = speed;
         return elapsed;
     }
 
@@ -447,9 +451,8 @@ module.exports = function Speedhack(mod) {
         };
     }
 
-    // Instant hits: tell Asura you are at the swing loc, then let the
-    // skill through unchanged. Do not rewrite the skill backward (snap)
-    // and do not hold/drop it (broken casts).
+    // Instant hits: snap only if the gap is under 80. A bigger snap is a
+    // teleport and Asura kicks. Do not rewrite the skill backward.
     function onOutgoingSkill(event) {
         if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) return;
         if (!event.loc) return;
@@ -460,6 +463,10 @@ module.exports = function Speedhack(mod) {
         const gap = dist2d(lastOutLoc, event.loc);
         forgeStats.lastSkillGap = Math.round(gap * 10) / 10;
         if (gap < 20) return;
+        if (gap > SKILL_SNAP_MAX) {
+            log(`skip hit snap ${forgeStats.lastSkillGap} (would kick)`);
+            return;
+        }
         const now = Date.now();
         if (now - lastSkillCatchupAt < SKILL_CATCHUP_COOLDOWN_MS) return;
         lastSkillCatchupAt = now;
@@ -479,11 +486,9 @@ module.exports = function Speedhack(mod) {
         seedForgeLoc(event.loc);
     }
 
-    // Keep the real run/walk type so you can actually move on foot.
     // The server only gets legal runSpeed distance per real wall-clock
     // time. dest is always pinned to loc so a 2x look-ahead cannot slip
     // through. Jump/fall/stop use the same XY budget.
-    // Skills are not touched — holding them made casts fail.
     function forgeOutgoingLocation(event) {
         const now = Date.now();
         const type = Number(event.type);
@@ -565,7 +570,7 @@ module.exports = function Speedhack(mod) {
         const srv = currentServer();
         const label = srv.name || srv.id || '?';
         if (safeModeActive()) {
-            log(`server=${label} — Asura 2.0x + instant hits (location-forge on)`);
+            log(`server=${label} — Asura 2.0x screen / 1.0x loc (wall clock)`);
         } else {
             log(`server=${label} — Agaia 2.0x, no location-forge`);
         }
@@ -600,6 +605,7 @@ module.exports = function Speedhack(mod) {
     try {
         mod.hook('S_EXIT', '*', (event) => {
             diag.lastExit = { category: event.category, code: event.code };
+            log(`S_EXIT category=${event.category} code=${event.code} skillGap=${forgeStats.lastSkillGap} maxDxy=${forgeStats.maxDxy} allow=${forgeStats.lastAllowed}`);
             writeDisconnectReport('S_EXIT', diag.lastExit);
         });
     } catch (_) {}
@@ -1176,7 +1182,7 @@ module.exports = function Speedhack(mod) {
             const srv = currentServer();
             log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
             log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
-            log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} burst=${cfg.forgeBurstMs} quiet=${cfg.forgeQuietMs} server=${srv.name || srv.id || '?'}`);
+            log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} allow=${forgeStats.lastAllowed} skillGap=${forgeStats.lastSkillGap} maxDxy=${forgeStats.maxDxy} clamped=${forgeStats.clamped}/${forgeStats.packets} server=${srv.name || srv.id || '?'}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
         }

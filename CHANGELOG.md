@@ -1,5 +1,65 @@
 # Speedhack — Changelog
 
+## 2.53 (2026-08-24)
+
+### Changed
+- Asura locations back to 1.0x wall-clock. 2.52 proved packet-time stretch does not matter: a 2.0x run with no hit and no fakes still kicked (`68` units in `206` ms). Hits snap only under 80. Agaia is unchanged.
+
+---
+## 2.52 (2026-08-24)
+
+### Changed
+- Asura: still 2.0x locations with packet time stretched to 1.0x, but no fake trail and no hit snap. 2.51 kicked on a mob hit (`lastSkillGap=28.6`, 5 same-tick fakes). Agaia is unchanged.
+
+---
+## 2.51 (2026-08-24)
+
+### Changed
+- Asura: 2.0x locations with packet time stretched to 1.0x. A teleport-sized gap is filled with fake 70-unit steps, then movement/hits continue. Agaia is unchanged.
+
+---
+## 2.50 (2026-08-24)
+
+### Changed
+- Asura back to 1.0x locations. 1.35x running kicked (allow=259). No extra catch-up packets. Hit snap still skipped over 80. Agaia is unchanged.
+
+---
+## 2.49 (2026-08-24)
+
+### Fixed
+- Asura NPC wait: catch-up now starts when you actually stop moving, not only on a type-7 stop packet. Walking into an NPC often never sent that packet so Asura stayed behind.
+
+---
+## 2.48 (2026-08-24)
+
+### Changed
+- Asura movement no longer teleports. Screen stays 2.0x. Locations are 1.35x (under the 1.5 check). After you stop, small legal steps walk Asura to you. Hit snap still only under 80. Agaia is unchanged.
+
+---
+## 2.47 (2026-08-24)
+
+### Changed
+- Asura hit snap only if the gap is under 80. A 402 snap after a long 2.0x run was the last kick. Hits in a fight still instant. Agaia is unchanged.
+
+---
+## 2.46 (2026-08-24)
+
+### Changed
+- Restored the exact Asura 1.0x clamp from 2.42 after 2.45 still kicked (idle injector + hit snap). Hits stay instant. Agaia is unchanged.
+
+---
+## 2.45 (2026-08-24)
+
+### Changed
+- Reverted Asura locations to 1.0x after a foot 2.0x run kicked (allow=340, no teleport). Hits stay instant. Agaia is unchanged.
+
+---
+## 2.44 (2026-08-24)
+
+### Changed
+- Asura: send 2.0x locations (under stock SpeedHack avg 450). dest is pinned. Instant hits still snap if a gap remains. Mount 2.0x is capped at 430 because that is over 450. Agaia is unchanged.
+
+---
 ## 2.42 (2026-08-24)
 
 ### Removed
