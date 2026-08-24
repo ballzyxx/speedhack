@@ -99,6 +99,9 @@ module.exports = function Speedhack(mod) {
     let lastSkillCatchupAt = 0;
     let mounted = false;
     let lastMountPacket = null;
+    let flying = false;
+    let landSpeedRestoreTimer = null;
+    let applyingStatReplay = false;
     let replayRetryTimer = null;
     let locomotionRefreshPending = false;
     let serverRunSpeed = 192;
@@ -535,7 +538,12 @@ module.exports = function Speedhack(mod) {
         resetForgeState();
         mounted = false;
         lastMountPacket = null;
+        flying = false;
         locomotionRefreshPending = false;
+        if (landSpeedRestoreTimer) {
+            try { mod.clearTimeout(landSpeedRestoreTimer); } catch (_) {}
+            landSpeedRestoreTimer = null;
+        }
         if (replayRetryTimer) {
             try { mod.clearTimeout(replayRetryTimer); } catch (_) {}
             replayRetryTimer = null;
@@ -639,6 +647,33 @@ module.exports = function Speedhack(mod) {
     mod.hook('C_PLAYER_LOCATION', 5, { order: Infinity, filter: { fake: false } }, (event) => {
         return forgeOutgoingLocation(event) ? true : undefined;
     });
+    try {
+        mod.hook('C_PLAYER_FLYING_LOCATION', '*', { filter: { fake: false } }, () => {
+            flying = true;
+        });
+    } catch (_) {
+        try {
+            mod.hook('C_PLAYER_FLYING_LOCATION', 4, { filter: { fake: false } }, () => {
+                flying = true;
+            });
+        } catch (__) {}
+    }
+    // Fly Forever injects a fake STAT with default walk/run/mount. After you
+    // land, rebuild locomotion the same way toggle/remount does so 2.0x
+    // returns without dismounting.
+    mod.hook('C_PLAYER_LOCATION', 5, { order: 10, filter: { fake: false } }, () => {
+        if (!flying) return;
+        flying = false;
+        if (!cfg.enabled) return;
+        restoreSpeedAfterLand();
+        if (landSpeedRestoreTimer) {
+            try { mod.clearTimeout(landSpeedRestoreTimer); } catch (_) {}
+        }
+        landSpeedRestoreTimer = mod.setTimeout(() => {
+            landSpeedRestoreTimer = null;
+            restoreSpeedAfterLand();
+        }, 50);
+    });
     for (const name of SKILL_START_PACKETS) {
         try {
             mod.hook(name, '*', { order: -20, filter: { fake: false } }, onOutgoingSkill);
@@ -686,6 +721,16 @@ module.exports = function Speedhack(mod) {
             locomotionRefreshPending = false;
             mod.setTimeout(() => refreshClientLocomotion(), 0);
         }
+        return changed ? true : undefined;
+    });
+
+    // Fly Forever's fake STAT uses the raw server block (1.0x ground speeds)
+    // plus boosted flightSpeedMul. Re-apply walk/run/mount here without
+    // caching the fake packet as lastStatUpdate.
+    mod.hook('S_PLAYER_STAT_UPDATE', '*', { order: 50, filter: { fake: true } }, (event) => {
+        if (applyingStatReplay) return;
+        if (!cfg.enabled) return;
+        const changed = multiplySpeedFields(event);
         return changed ? true : undefined;
     });
 
@@ -873,12 +918,19 @@ module.exports = function Speedhack(mod) {
         sendUserMoveType(type);
     }
 
+    function restoreSpeedAfterLand() {
+        if (!cfg.enabled) return;
+        if (cfg.autoDisableInCombat && inCombat) return;
+        replayCachedMoveAt();
+    }
+
     function sendStatReplay(forceMultiplier) {
         if (!lastStatUpdate || lastStatUpdate.runSpeed == null) return false;
         const pkt = Object.assign({}, lastStatUpdate);
         if (liveHp !== null && pkt.hp !== undefined) pkt.hp = liveHp;
         if (liveMaxHp !== null && pkt.maxHp !== undefined) pkt.maxHp = liveMaxHp;
         multiplySpeedFields(pkt, forceMultiplier);
+        applyingStatReplay = true;
         try {
             mod.send('S_PLAYER_STAT_UPDATE', '*', pkt);
             return true;
@@ -886,6 +938,8 @@ module.exports = function Speedhack(mod) {
             diag.lastReplayErr = `STAT: ${e.message}`;
             log(`replay STAT failed: ${e.message}`);
             return false;
+        } finally {
+            applyingStatReplay = false;
         }
     }
 
@@ -1513,6 +1567,10 @@ module.exports = function Speedhack(mod) {
     }
 
     this.destructor = () => {
+        if (landSpeedRestoreTimer) {
+            try { mod.clearTimeout(landSpeedRestoreTimer); } catch (_) {}
+            landSpeedRestoreTimer = null;
+        }
         if (replayRetryTimer) {
             try { mod.clearTimeout(replayRetryTimer); } catch (_) {}
             replayRetryTimer = null;

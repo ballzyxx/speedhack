@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.38 (2026-08-24)
+
+### Fixed
+- Landing from Fly Forever while still mounted now puts speedhack 2.0x back on. You do not need to dismount. Fly speed in the air is unchanged. Agaia and Asura both get this.
+
+---
 ## 2.37 (2026-08-24)
 
 ### Changed
