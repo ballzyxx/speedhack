@@ -1,9 +1,9 @@
 {
     "files": {
-        "CHANGELOG.md": "c066811d7e799147381486168ce6c4a4a71fc3d23d6d8c864fc4fcc513387f6b",
+        "CHANGELOG.md": "e94c26dc8de2d784d58b30470307d2896412c00fccce46379bd54a8b216a2c01",
         "ahk/hotkey.template.ahk": "5fa90d24997bc6fc31265c5cba196ec63611fddcd2c4ecc1abfcc759b20b87ae",
         "index.js": "c8893d6ccd6b290c122a473f3622245424de14c2f7fd5757103cea56c5764d1e",
-        "module.json": "a4c5f9b1fd350d13c3f15d904375ae830503b9c166ce3738fd2021d78dd9f9c5",
+        "module.json": "fee3e9aa4c79bcb6b31a01bd8ebe61c430fcb62b932b921c25d4432495a8298d",
         "settings_migrator.js": "d55da7f0f88444def797dd7ac1a62f741149aa5c1fa69a2a36b678ac09a30f25",
         "settings_structure.js": "56121b8586c5c4768946adcad7092218c0a310d885aa0bbaec443424411f6160",
         "ui/index.html": "58c3a31edba8261fcd4d311640eb1d0132a0c90a596a0d8111c6560108a9229c"

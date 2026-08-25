@@ -1,5 +1,10 @@
 # Speedhack — Changelog
 
+## 2.54 (2026-08-25)
+
+### Fixed
+- **Auto-update** — Toolbox now pulls from GitHub `main`, so later versions download on Toolbox start.
+
 ## 2.53 (2026-08-24)
 
 ### Changed
