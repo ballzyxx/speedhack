@@ -1,7 +1,7 @@
 {
     "disableAutoUpdate": false,
     "name": "speedhack",
-    "version": "2.54",
+    "version": "2.55",
     "author": "ballzyxx",
     "description": "Move-speed multiplier with GUI, AHK hotkey, instant reload restore, and per-field walk/run/mount/swim overrides",
     "servers": [

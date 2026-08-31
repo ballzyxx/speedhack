@@ -1,5 +1,21 @@
 # Speedhack — Changelog
 
+## 2.55 (2026-08-31)
+
+### Added
+- **ServerConfig auto-detect** — `safeMode auto` reads the running server's `ServerConfig.xml` (local process, mapped drives, UNC shares) and only forges when `SpeedHack` / `SpeedHackAlt` is actually on.
+- **Remote servers you own** — `spd safe declare on|off` records a host when the config file is unreachable. Learned profiles remember a kick or a long clean run.
+- **Channel / spawn guards** — zone changes no longer treat spawn teleports as speed corrections.
+
+### Changed
+- Skill packets stay unmodified. Position snap-backs are blocked at `S_INSTANT_MOVE` instead of rewriting skill loc/dest.
+- Skill-cancel suppression only applies for 1s after a real position correction, so normal skill ends and "cannot use" replies still arrive.
+
+### Fixed
+- Login no longer blocks the proxy on a process probe / disk scan.
+- Dead `forgeBurstMs` / `forgeQuietMs` knobs removed.
+
+---
 ## 2.54 (2026-08-25)
 
 ### Fixed

@@ -251,7 +251,7 @@
         <div id="t_autoDisableInCombat" class="toggle" data-key="autoDisableInCombat"></div>
     </div>
     <div class="row">
-        <div class="label">Safe movement<small id="safeModeHint">Auto detects the server. Agaia = off. Asura = on.</small></div>
+            <div class="label">Safe movement<small id="safeModeHint">Auto reads the server's ServerConfig.xml and only forges when the server actually checks movement.</small></div>
         <div class="slider-row">
             <span id="safeActivePill" class="status-pill unknown">—</span>
             <select id="s_safeMode" data-key="safeMode">
@@ -397,7 +397,7 @@
             if (serverInfo && serverInfo.forge) {
                 safePill.textContent = 'ON';
                 safePill.className = 'status-pill on';
-            } else if (kind === 'agaia' || (serverInfo && serverInfo.forge === false && kind !== 'unknown')) {
+            } else if (kind === 'unchecked' || kind === 'agaia' || (serverInfo && serverInfo.forge === false && kind !== 'unknown')) {
                 safePill.textContent = 'OFF';
                 safePill.className = 'status-pill off';
             } else {
