@@ -12,26 +12,6 @@ module.exports = function migrate(oldVersion, oldSettings) {
             swimSpeed:  null,
         },
         autoDisableInCombat: false,
-        safeMode: 'auto',
-        // When the server's ServerConfig.xml is readable, safeMode 'auto' decides
-        // whether the location forge is needed from the server's real anti-cheat
-        // settings instead of guessing from the server id.
-        //
-        // The path is auto-detected from the running WorldServer/ArbiterServer
-        // process, so any number of separate server installs work with no setup.
-        // These options are only for unusual layouts:
-        //   serverConfigPath        - hard override, wins over detection
-        //   serverConfigPaths       - list tried in order if detection fails
-        //   serverConfigSearchRoots - folders to scan for the known subpath
-        useServerConfig: true,
-        serverConfigPath: '',
-        serverConfigPaths: [],
-        serverConfigSearchRoots: [],
-        // Servers you run yourself, declared by address, for when the config
-        // file cannot be reached (e.g. another PC with no shared folder).
-        // Populated by "spd safe declare on|off" while connected.
-        //   { "192.168.2.50": { "checks": false, "label": "my test box" } }
-        knownServers: {},
         showIndicator: true,
         indicatorAbnormalityId: 4620,
         triggerItemId: 0,
@@ -56,8 +36,14 @@ module.exports = function migrate(oldVersion, oldSettings) {
     delete merged.safeCooldownMs;
     delete merged.forgeBurstMs;
     delete merged.forgeQuietMs;
+    delete merged.safeMode;
+    delete merged.useServerConfig;
+    delete merged.serverConfigPath;
+    delete merged.serverConfigPaths;
+    delete merged.serverConfigSearchRoots;
+    delete merged.serverConfigShares;
+    delete merged.knownServers;
     merged.presets = Object.assign({}, defaults.presets, (oldSettings && oldSettings.presets) || {});
     merged.fieldMultipliers = Object.assign({}, defaults.fieldMultipliers, (oldSettings && oldSettings.fieldMultipliers) || {});
-    if ((oldVersion || 0) < 4) merged.safeMode = 'auto';
     return merged;
 };

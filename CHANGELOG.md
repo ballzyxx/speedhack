@@ -1,5 +1,14 @@
 # Speedhack — Changelog
 
+## 2.56 (2026-08-31)
+
+### Added
+- **Current-server auto-detect** — reads the live Toolbox connection (server-list name, planet id, IP). The GUI pill and `/8 spd s` show Asura, Agaia, or your private world. Planet id 2800 is not treated as Agaia.
+
+### Removed
+- **Safe movement** — no location forge, no `ServerConfig.xml` reader, no `spd safe` commands. Positions go to the server as the client sent them. Use this on a World with the speed checker off.
+
+---
 ## 2.55 (2026-08-31)
 
 ### Added

@@ -1,11 +1,11 @@
 {
     "files": {
-        "CHANGELOG.md": "6d7ceb4f0d271e2b5bce81669ca39ce390f8c72ce59d372a7504cb797abc79aa",
+        "CHANGELOG.md": "fd0f79e7a48c55d0c0eb3eacc9a8a8dddfbd0ccc89131b98a9e0f5623fda10d0",
         "ahk/hotkey.template.ahk": "5fa90d24997bc6fc31265c5cba196ec63611fddcd2c4ecc1abfcc759b20b87ae",
-        "index.js": "2952ba919c6e0c9719dff23723e8a46fa113a222ecd2d9bab82652a0d4d261f8",
-        "module.json": "f212e9e9dae34b3720051e193fed568c6bff01347217e2e9725b64b776cc0d09",
-        "settings_migrator.js": "ea0eaf32d7afea63a302b9a49131f916d5914c6e9dafd3616e7aa59b19b48435",
-        "settings_structure.js": "8034855a05e74e2afccf643b3d5d06414c7ccb394efd1da54e396b1587e8b6fe",
-        "ui/index.html": "c34fddeba5d6843291e9746817e537204209e0e3ad997b838f62fcaaa5b5547c"
+        "index.js": "2e4d004b9e3302ac305099d35b33779bfd70c355bf65f3205b2450c4f7822088",
+        "module.json": "b3a8b6cc1591c90c9fb727fe3fb19e6b6ea4ecb1fa4a30f3603e8f3f7ecdcbc6",
+        "settings_migrator.js": "021b75c18ee361388414adf3692c7e7d6b4518387eda420a8243593830682e67",
+        "settings_structure.js": "63ba3dfe2fbe6103bf57be79b8ef408aaebe493321e15c43ab1b98c0ce66ea67",
+        "ui/index.html": "0226d999e842b5e6348c374c8d351d5e8adef54c2b2c4ed4f6aa3737f479ac82"
     }
 }

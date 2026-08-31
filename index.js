@@ -9,10 +9,7 @@
  * and S_PLAYER_STAT_UPDATE), multiplies the speed fields by cfg.multiplier,
  * and forwards them. The client believes the new speed AND the server agreed
  * to it (because we modified what the server told us), so movement is fully
- * authoritative — no rubber-banding.
- *
- * Asura: 2.0x on the client, legal runSpeed steps to the server (wall-clock).
- * Hits snap only if the gap is under 80. Agaia: raw 2.0x, no forge.
+ * authoritative — no rubber-banding. Positions are sent as-is.
  *
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
@@ -23,6 +20,7 @@
  *   - Self-only buff icon indicator
  *   - GUI window (Ctrl+Shift+S)
  *   - Presets: walk / jog / sprint / dash / yeet
+ *   - Auto-detects the live server (name / id / IP from the Toolbox connection)
  *
  * Commands (typed in /8 toolbox chat):
  *   spd                       → toggle on/off
@@ -39,13 +37,11 @@
  *   spd reloadhk              → restart AHK watcher
  *   spd ui                    → open the GUI (also Ctrl+Shift+S)
  *   spd reload                → re-read config.json from disk
- *   spd safe [auto|on|off]    → Asura location-forge (default auto)
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 
 let electronMod = null;
 try { electronMod = require('electron'); } catch (_) { /* unavailable in headless toolbox */ }
@@ -53,15 +49,6 @@ try { electronMod = require('electron'); } catch (_) { /* unavailable in headles
 const MAX_MULTIPLIER = 10.0;
 const MIN_MULTIPLIER = 1.0;
 const INT16_MAX = 32767;
-const FORGE_SLACK = 1.0;
-const FORGE_BUDGET_CAP_MS = 150;
-const SKILL_START_PACKETS = [
-    'C_START_SKILL',
-    'C_START_TARGETED_SKILL',
-    'C_START_COMBO_INSTANT_SKILL',
-    'C_START_INSTANCE_SKILL',
-    'C_START_INSTANCE_SKILL_EX',
-];
 
 module.exports = function Speedhack(mod) {
     const cfg = mod.settings;
@@ -88,18 +75,7 @@ module.exports = function Speedhack(mod) {
     // connection — a stale S_PLAYER_STAT_UPDATE (null fields, old HP, etc.)
     // crashes the client or drops the socket as soon as you enter the world.
     let statsFromThisConnection = false;
-    let lastOutLoc = null;
-    let lastForgeType = 0;
-    let lastSentWall = 0;
-    let moveBudget = 0;
-    let budgetAt = 0;
     let lastLocPacket = null;
-    let lastSkillAt = 0;
-    let isChangingZone = false;
-    let lastRealClientPos = null;
-    // Set when an S_INSTANT_MOVE correction is intercepted. Used to tell a
-    // position-rejection skill cancel from a normal skill ending.
-    let lastCorrectionAt = 0;
     let mounted = false;
     let lastMountPacket = null;
     let flying = false;
@@ -107,20 +83,6 @@ module.exports = function Speedhack(mod) {
     let applyingStatReplay = false;
     let replayRetryTimer = null;
     let locomotionRefreshPending = false;
-    let serverRunSpeed = 192;
-    const forgeStats = {
-        packets: 0,
-        clamped: 0,
-        lastType: 0,
-        lastDt: 0,
-        lastDxy: 0,
-        lastMax: 0,
-        lastAllowed: 0,
-        maxDxy: 0,
-        totalDxy: 0,
-        lastSkillGap: 0,
-        lastInteractGap: 0,
-    };
     const diag = {
         lastReplayAt: 0,
         lastReplayErr: null,
@@ -135,6 +97,7 @@ module.exports = function Speedhack(mod) {
     const LOCAL_CACHE_FILES = [
         'runtime-cache.json',
         'last-disconnect.json',
+        'server-profiles.json',
         path.join('ahk', 'hotkey.runtime.ahk'),
         path.join('ahk', 'hotkey.ipc'),
     ];
@@ -218,18 +181,29 @@ module.exports = function Speedhack(mod) {
         try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
     }
 
+    function stripRemovedSettings() {
+        delete cfg.rampMs;
+        delete cfg.safeMode;
+        delete cfg.useServerConfig;
+        delete cfg.serverConfigPath;
+        delete cfg.serverConfigPaths;
+        delete cfg.serverConfigSearchRoots;
+        delete cfg.serverConfigShares;
+        delete cfg.knownServers;
+        delete cfg.forgeBurstMs;
+        delete cfg.forgeQuietMs;
+        delete cfg.safeScoreLimit;
+        delete cfg.safeCooldownMs;
+    }
+
     try {
         if (fs.existsSync(FACTORY_RESET_FLAG)) {
             applyFactorySettings();
             try { fs.unlinkSync(FACTORY_RESET_FLAG); } catch (_) {}
         }
     } catch (_) {}
-    delete cfg.rampMs;
-    if (cfg.safeMode !== 'on' && cfg.safeMode !== 'off' && cfg.safeMode !== 'auto') cfg.safeMode = 'auto';
+    stripRemovedSettings();
     if (!cfg.hotkey || !String(cfg.hotkey).trim()) cfg.hotkey = '-';
-    // Vestigial from an older forge design; nothing reads them.
-    delete cfg.forgeBurstMs;
-    delete cfg.forgeQuietMs;
 
     const clampMultiplier = (n) => {
         const v = Number(n);
@@ -308,537 +282,123 @@ module.exports = function Speedhack(mod) {
         return changed;
     }
 
-    function currentServer() {
-        try {
-            const id = (mod.serverId != null)
-                ? mod.serverId
-                : (mod.game && mod.game.me && mod.game.me.serverId);
-            const list = mod.serverList
-                || (mod.connection && mod.connection.metadata && mod.connection.metadata.serverList)
-                || {};
-            const entry = (id != null && list[id]) ? list[id] : {};
-            return { id, name: String(entry.name || entry.serverName || '') };
-        } catch (_) {
-            return { id: null, name: '' };
-        }
-    }
-
-    function isAsuraServer() {
-        const s = currentServer();
-        if (Number(s.id) === 500) return true;
-        return /asura/i.test(s.name);
-    }
-
-    function isAgaiaServer() {
-        const s = currentServer();
-        // ID 2800 alone is not sufficient — private servers often reuse this
-        // planet ID and still have a strict speed checker. Require the server
-        // name to explicitly identify itself as Agaia before disabling the forge.
-        return /agaia|agais/i.test(s.name);
-    }
-
-    // ----- ServerConfig.xml discovery + reader -----
-    // Reads the game server's real anti-cheat settings off disk. This replaces
-    // guessing the server by id/name, which silently disabled the forge on
-    // private servers that reuse planet id 2800.
-    //
-    // The path is discovered automatically, so this works on any number of
-    // separate server installs with no per-server setup: ServerConfig.xml always
-    // sits beside the server binaries, and the WorldServer/ArbiterServer process
-    // that is currently running is by definition the server being played.
-    //
-    // Resolution order:
-    //   1. cfg.serverConfigPath      - explicit override, if set and present
-    //   2. running server process    - dirname(exe)/ServerConfig.xml
-    //   3. cfg.serverConfigPaths     - explicit list to try in order
-    //   4. cfg.serverConfigSearchRoots - bounded scan for the known subpath
-    const SRV_PROC_NAMES = ['WorldServer', 'ArbiterServer'];
-    const SRVCFG_MARKER = path.join('Server', 'Executable', 'Bin', 'ServerConfig.xml');
-    const SRVCFG_SEARCH_DEPTH = 6;
-    const SRVCFG_REDISCOVER_MS = 60000;
-    const SRVCFG_SKIP_DIRS = /^(windows|winnt|program files|program files \(x86\)|programdata|appdata|\$recycle\.bin|system volume information|node_modules|\.git|temp|tmp)$/i;
-    let srvCfgCache = null;      // { path, mtimeMs, data }
-    let srvCfgPathCache = null;  // { path, at }
-
-    function configBesideExe(exePath) {
-        try {
-            const p = path.join(path.dirname(exePath), 'ServerConfig.xml');
-            return fs.existsSync(p) ? p : null;
-        } catch (_) { return null; }
-    }
-
-    // Ask Windows which server process is running and take the config next to
-    // it. [Console]::Out.WriteLine is used instead of the pipeline so PowerShell
-    // does not wrap long paths at the console width.
-    function discoverConfigFromProcess() {
-        if (process.platform !== 'win32') return null;
-        const filter = SRV_PROC_NAMES.map((n) => `$_.Name -like '${n}*'`).join(' -or ');
-        let out = '';
-        try {
-            const r = spawnSync('powershell', [
-                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-                `Get-CimInstance Win32_Process | Where-Object { ${filter} } | ForEach-Object { [Console]::Out.WriteLine($_.ExecutablePath) }`,
-            ], { encoding: 'utf8', timeout: 8000, windowsHide: true });
-            if (!r || r.status !== 0) return null;
-            out = String(r.stdout || '');
-        } catch (_) { return null; }
-        for (const line of out.split(/\r?\n/)) {
-            const exe = line.trim();
-            if (!exe) continue;
-            const found = configBesideExe(exe);
-            if (found) return found;
-        }
-        return null;
-    }
-
-    // Breadth-first, depth-capped, time-budgeted scan for
-    // <root>/**/Server/Executable/Bin/ServerConfig.xml. The budget matters most
-    // for UNC roots, where each directory read is a network round trip.
-    function discoverConfigBySearch(roots, budgetMs) {
-        const deadline = Date.now() + (budgetMs || 5000);
-        for (const root of (roots || [])) {
-            if (!root) continue;
-            const queue = [[root, 0]];
-            while (queue.length) {
-                if (Date.now() > deadline) return null;
-                const [dir, depth] = queue.shift();
-                try {
-                    const direct = path.join(dir, SRVCFG_MARKER);
-                    if (fs.existsSync(direct)) return direct;
-                    if (depth >= SRVCFG_SEARCH_DEPTH) continue;
-                    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-                        if (!e.isDirectory() || SRVCFG_SKIP_DIRS.test(e.name)) continue;
-                        queue.push([path.join(dir, e.name), depth + 1]);
-                    }
-                } catch (_) { /* unreadable dir, skip */ }
-            }
-        }
-        return null;
-    }
-
-    // ----- remote server support -----
-    // The game server's address, so we can tell a local install from a remote
-    // one and build UNC candidates for the remote case.
     function serverHost() {
         try {
-            if (mod.serverIp) return String(mod.serverIp).replace(/^::ffff:/, '');
+            if (mod.serverIp) return String(mod.serverIp).replace(/^::ffff:/, '').split('%')[0];
         } catch (_) {}
         return null;
     }
 
-    function localAddresses() {
-        const ips = new Set(['127.0.0.1', '::1', 'localhost']);
+    function serverListMap() {
         try {
-            const ifaces = os.networkInterfaces() || {};
-            for (const list of Object.values(ifaces)) {
-                for (const a of (list || [])) {
-                    if (a && a.address) ips.add(String(a.address).replace(/^::ffff:/, ''));
+            return mod.serverList
+                || (mod.connection && mod.connection.metadata && mod.connection.metadata.serverList)
+                || {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function listEntry(list, id) {
+        if (id == null || id === '' || !list) return null;
+        if (list[id]) return list[id];
+        const asStr = String(id);
+        if (list[asStr]) return list[asStr];
+        const asNum = Number(id);
+        if (Number.isFinite(asNum) && list[asNum]) return list[asNum];
+        return null;
+    }
+
+    function classifyServer(id, name, host) {
+        const n = String(name || '');
+        if (Number(id) === 500 || /asura/i.test(n)) return 'asura';
+        if (/agaia|agais/i.test(n)) return 'agaia';
+        if (id != null && id !== '') return 'private';
+        if (host) return 'private';
+        return 'unknown';
+    }
+
+    function currentServer() {
+        let id = null;
+        let name = '';
+        const host = serverHost();
+        try {
+            if (mod.serverId != null && mod.serverId !== '') id = mod.serverId;
+        } catch (_) {}
+        try {
+            if ((id == null || id === '') && mod.game && mod.game.me && mod.game.me.serverId != null)
+                id = mod.game.me.serverId;
+        } catch (_) {}
+
+        const list = serverListMap();
+        try {
+            const entry = listEntry(list, id);
+            if (entry) name = String(entry.name || entry.serverName || '');
+            if (!name && host) {
+                for (const [sid, e] of Object.entries(list)) {
+                    if (!e) continue;
+                    const eip = String(e.ip || e.address || e.host || '').replace(/^::ffff:/, '');
+                    if (eip && eip === host) {
+                        if (id == null || id === '') id = sid;
+                        name = String(e.name || e.serverName || '');
+                        break;
+                    }
                 }
             }
         } catch (_) {}
-        return ips;
-    }
 
-    function serverIsLocal() {
-        const h = serverHost();
-        if (!h) return true; // unknown: assume local, process probe is harmless
-        return localAddresses().has(h);
-    }
-
-    // For a remote server, the config can only be read through a file share.
-    // Probe a few likely share names on the server host; each check is a single
-    // stat so a miss is cheap. Anything found is used as a search root.
-    function uncSearchRoots() {
-        const host = serverHost();
-        if (!host || serverIsLocal()) return [];
-        const shares = (Array.isArray(cfg.serverConfigShares) && cfg.serverConfigShares.length)
-            ? cfg.serverConfigShares
-            : ['TERA', 'Tera', 'tera', 'Server', 'server', 'Games', 'games', 'C$', 'D$', 'E$'];
-        const roots = [];
-        for (const s of shares) {
-            const r = `\\\\${host}\\${s}\\`;
-            try { if (fs.existsSync(r)) roots.push(r); } catch (_) {}
-        }
-        return roots;
-    }
-
-    // Every drive letter that currently resolves, which includes mapped network
-    // drives — the usual way a remote server's folder is reachable.
-    function drivesRoots() {
-        const roots = [];
-        if (process.platform !== 'win32') return roots;
-        for (let c = 67 /* C */; c <= 90 /* Z */; c++) {
-            const r = `${String.fromCharCode(c)}:\\`;
-            try { if (fs.existsSync(r)) roots.push(r); } catch (_) {}
-        }
-        return roots;
-    }
-
-    function resolveServerConfigPath() {
-        const explicit = cfg.serverConfigPath;
-        if (explicit) {
-            try { if (fs.existsSync(explicit)) return explicit; } catch (_) {}
-        }
-        const now = Date.now();
-        if (srvCfgPathCache && (now - srvCfgPathCache.at) < SRVCFG_REDISCOVER_MS) {
-            try { if (fs.existsSync(srvCfgPathCache.path)) return srvCfgPathCache.path; } catch (_) {}
-        }
-
-        let found = null;
-        // Local install: the running server process points straight at it.
-        if (serverIsLocal()) found = discoverConfigFromProcess();
-        // Explicit list next (UNC paths work here).
-        if (!found && Array.isArray(cfg.serverConfigPaths)) {
-            for (const p of cfg.serverConfigPaths) {
-                try { if (p && fs.existsSync(p)) { found = p; break; } } catch (_) {}
-            }
-        }
-        // Then scan: configured roots, else all drives plus any reachable share
-        // on the server host. Budgeted so a big or slow disk cannot stall us.
-        if (!found) {
-            const configured = Array.isArray(cfg.serverConfigSearchRoots) ? cfg.serverConfigSearchRoots.filter(Boolean) : [];
-            const roots = configured.length ? configured : drivesRoots().concat(uncSearchRoots());
-            found = discoverConfigBySearch(roots, 5000);
-        }
-        srvCfgPathCache = found ? { path: found, at: now } : null;
-        return found;
-    }
-
-    function attrOf(tagAttrs, name) {
-        if (!tagAttrs) return null;
-        const m = tagAttrs.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i'));
-        return m ? m[1] : null;
-    }
-    // Require whitespace after the tag name so <SpeedHack> does not also
-    // match <SpeedHackAlt>.
-    function tagAttrsOf(xml, tag) {
-        const m = xml.match(new RegExp(`<${tag}(\\s[^>]*?)/?>`, 'i'));
-        return m ? m[1] : null;
-    }
-    const isTrue = (v) => String(v).toLowerCase() === 'true';
-
-    function readServerConfig() {
-        if (!cfg.useServerConfig) return null;
-        const file = resolveServerConfigPath();
-        if (!file) return null;
-        let stat;
-        try { stat = fs.statSync(file); } catch (_) { return null; }
-        // Re-parse when the file is edited or when a different server install
-        // has been detected.
-        if (srvCfgCache && srvCfgCache.path === file && srvCfgCache.mtimeMs === stat.mtimeMs) {
-            return srvCfgCache.data;
-        }
-
-        let xml;
-        try { xml = fs.readFileSync(file, 'utf8'); } catch (_) { return null; }
-
-        const sh    = tagAttrsOf(xml, 'SpeedHack');
-        const shAlt = tagAttrsOf(xml, 'SpeedHackAlt');
-        const pos   = tagAttrsOf(xml, 'CommonPosCheck');
-        const data = {
-            speedHackOn:     sh    ? isTrue(attrOf(sh, 'turnOn'))    : null,
-            speedHackAltOn:  shAlt ? isTrue(attrOf(shAlt, 'turnOn')) : null,
-            disconnAvgSpeed: sh ? Number(attrOf(sh, 'disconnAvgSpeed')) || null : null,
-            gapClientServer: pos ? Number(attrOf(pos, 'gapOfClientServer')) || null : null,
+        const kind = classifyServer(id, name, host);
+        const idNum = (id == null || id === '') ? null : Number(id);
+        const label = name
+            || (kind === 'asura' ? 'Asura' : kind === 'agaia' ? 'Agaia' : null)
+            || (idNum != null && Number.isFinite(idNum) ? `Server ${idNum}` : '')
+            || (host ? host : '');
+        return {
+            id: (idNum != null && Number.isFinite(idNum)) ? idNum : (id == null || id === '' ? null : id),
+            name,
+            host,
+            kind,
+            label,
         };
-        // A parse that finds neither checker means the file layout is not what
-        // we expect; treat it as unreadable so we fall back to the safe default.
-        if (data.speedHackOn === null && data.speedHackAltOn === null) return null;
-        data.path = file;
-        srvCfgCache = { path: file, mtimeMs: stat.mtimeMs, data };
-        return data;
-    }
-
-    // True when any server-side speed checker is enabled, i.e. the forge is
-    // required. null when the config could not be read.
-    function serverNeedsForge() {
-        const c = readServerConfig();
-        if (!c) return null;
-        return !!(c.speedHackOn || c.speedHackAltOn);
-    }
-
-    // ----- learned per-server profiles -----
-    // When the config file cannot be reached (server on another machine with no
-    // share), the module still has to decide whether to forge. It remembers what
-    // each server has actually done: a speed-hack disconnect proves the server
-    // checks movement; a long clean stretch with the forge off proves it does
-    // not. Keyed by host+serverId so every server is tracked separately.
-    const PROFILES_PATH = path.join(__dirname, 'server-profiles.json');
-    const PROFILE_CLEAN_MS = 5 * 60 * 1000; // clean boosted time before trusting "no checks"
-    let profiles = null;
-
-    function loadProfiles() {
-        if (profiles) return profiles;
-        try { profiles = JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf8')); } catch (_) { profiles = {}; }
-        if (!profiles || typeof profiles !== 'object') profiles = {};
-        return profiles;
-    }
-    function saveProfiles() {
-        try { fs.writeFileSync(PROFILES_PATH, JSON.stringify(loadProfiles(), null, 2)); } catch (_) {}
-    }
-    function serverKey() {
-        const s = currentServer();
-        return `${serverHost() || '?'}|${s.id != null && s.id !== '' ? s.id : '?'}`;
-    }
-    function serverProfile() {
-        const all = loadProfiles();
-        const k = serverKey();
-        if (!all[k]) all[k] = { checks: null, cleanBoostedMs: 0, lastKickAt: 0, updatedAt: 0 };
-        return all[k];
-    }
-    function markServerChecks(value, reason) {
-        const prof = serverProfile();
-        if (prof.checks === value) return;
-        prof.checks = value;
-        prof.updatedAt = Date.now();
-        if (value) { prof.lastKickAt = Date.now(); prof.cleanBoostedMs = 0; }
-        saveProfiles();
-        log(`learned: this server ${value ? 'DOES' : 'does not'} check movement (${reason})`);
-        refreshServerPolicy();
-    }
-    // Called periodically while boosted with the forge off. A long clean run is
-    // evidence the server is not policing movement.
-    function creditCleanTime(ms) {
-        const prof = serverProfile();
-        if (prof.checks !== null) return;
-        prof.cleanBoostedMs = (prof.cleanBoostedMs || 0) + ms;
-        if (prof.cleanBoostedMs >= PROFILE_CLEAN_MS) markServerChecks(false, 'no violations while unforged');
-    }
-
-    // ----- resolved policy (computed rarely, read often) -----
-    // safeModeActive() runs on every movement packet, so the expensive parts
-    // (process probe, disk scan, file parse) are done here instead and only on
-    // boot, login, or an explicit command.
-    let serverPolicy = { forge: true, source: 'default' };
-    let policyHost = null;   // host the current policy was resolved for
-
-    // A server you have declared yourself, matched on address. Lets a server
-    // you own be identified even when its config file is unreachable.
-    function declaredServer() {
-        const map = cfg.knownServers;
-        if (!map || typeof map !== 'object') return null;
-        const host = serverHost();
-        if (!host) return null;
-        const entry = map[host];
-        if (!entry || typeof entry !== 'object' || typeof entry.checks !== 'boolean') return null;
-        return entry;
-    }
-
-    function refreshServerPolicy() {
-        const needed = serverNeedsForge();
-        const declared = declaredServer();
-        if (needed !== null) {
-            serverPolicy = { forge: needed, source: 'ServerConfig.xml' };
-        } else if (declared) {
-            serverPolicy = { forge: declared.checks, source: `declared${declared.label ? ' (' + declared.label + ')' : ''}` };
-        } else {
-            const prof = serverProfile();
-            if (prof.checks === true)       serverPolicy = { forge: true,  source: 'learned' };
-            else if (prof.checks === false) serverPolicy = { forge: false, source: 'learned' };
-            else if (isAgaiaServer())       serverPolicy = { forge: false, source: 'name match' };
-            else if (isAsuraServer())       serverPolicy = { forge: true,  source: 'name match' };
-            else                            serverPolicy = { forge: true,  source: 'safe default' };
-        }
-        broadcastUiState();
-        return serverPolicy;
-    }
-
-    function safeModeActive() {
-        if (cfg.safeMode === 'on') return true;
-        if (cfg.safeMode === 'off') return false;
-        return serverPolicy.forge;
     }
 
     function guiServerInfo() {
         const s = currentServer();
-        const kind = serverPolicy.forge ? 'checked' : 'unchecked';
-        const name = s.name
-            ? (s.id != null && s.id !== '' ? `${s.name} (${s.id})` : s.name)
-            : (s.id != null && s.id !== '' ? `Server ${s.id}` : 'Not logged in');
+        const loggedIn = s.kind !== 'unknown' || s.host != null;
+        const name = s.label
+            ? (s.id != null ? `${s.label} (${s.id})` : s.label)
+            : 'Not logged in';
         return {
             name,
-            id: s.id == null || s.id === '' ? null : Number(s.id),
-            kind,
-            forge: safeModeActive(),
-            safeMode: cfg.safeMode,
+            label: s.label || 'Not logged in',
+            id: s.id,
+            host: s.host,
+            kind: loggedIn ? s.kind : 'unknown',
         };
     }
 
-    function cloneLoc(loc) {
-        if (!loc) return loc;
-        if (typeof loc.clone === 'function') return loc.clone();
-        return { x: loc.x, y: loc.y, z: loc.z };
-    }
-
-    function currentMeLoc() {
-        try {
-            if (mod.game && mod.game.me && mod.game.me.loc) return cloneLoc(mod.game.me.loc);
-        } catch (_) {}
-        return null;
-    }
-
-    function dist2d(a, b) {
-        if (!a || !b) return 0;
-        const dx = Number(a.x) - Number(b.x);
-        const dy = Number(a.y) - Number(b.y);
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    function clampLoc2d(from, to, maxDist) {
-        if (!from || !to) return to;
-        const d = dist2d(from, to);
-        if (d <= maxDist || maxDist <= 0) return to;
-        const t = maxDist / d;
-        const loc = {
-            x: Number(from.x) + (Number(to.x) - Number(from.x)) * t,
-            y: Number(from.y) + (Number(to.y) - Number(from.y)) * t,
-            z: Number(from.z) + (Number(to.z) - Number(from.z)) * t,
-        };
-        if (typeof to.clone === 'function' && to.constructor) {
-            try {
-                const v = to.clone();
-                v.x = loc.x; v.y = loc.y; v.z = loc.z;
-                return v;
-            } catch (_) {}
+    let lastAnnouncedServer = '';
+    function announceCurrentServer() {
+        const s = currentServer();
+        const key = `${s.host || '?'}|${s.id != null ? s.id : '?'}|${s.kind}|${s.label}`;
+        if (key === lastAnnouncedServer) {
+            broadcastUiState();
+            return s;
         }
-        return loc;
-    }
-
-    function cacheRealRunSpeed(event) {
-        // Forge as fast as the server will tolerate, to keep drift minimal.
-        // The [Limited] Dist Margin equals the character's total speed and the
-        // check window has been observed up to ~1.05s, so the forge must stay
-        // at or below total / 1.05 ≈ total × 0.95 or the margin is exceeded.
-        // Running the forge this close to the limit minimises how fast the
-        // client/server position gap grows, which is what skill packets expose.
-        const total = (Number(event.runSpeed) || 0) + (Number(event.runSpeedBonus) || 0);
-        const run = Math.floor(total * 0.95);
-        if (run > 1) serverRunSpeed = run;
-    }
-
-    function realRunSpeed() {
-        return Math.max(1, serverRunSpeed || 192);
-    }
-
-    function resetForgeState() {
-        lastOutLoc = null;
-        // Must clear the cached real position too. It is used as the fallback
-        // target when redirecting S_INSTANT_MOVE; a stale value from the previous
-        // channel/zone would teleport the client into old-channel coordinates.
-        lastRealClientPos = null;
-        lastForgeType = 0;
-        lastSentWall = 0;
-        moveBudget = 0;
-        budgetAt = 0;
-    }
-
-    function seedForgeLoc(loc) {
-        const now = Date.now();
-        lastOutLoc = loc ? cloneLoc(loc) : null;
-        lastSentWall = now;
-        moveBudget = 0;
-        budgetAt = loc ? now : 0;
-    }
-
-    function acceptForgedLoc(event, loc, type, now) {
-        event.loc = loc;
-        if (event.dest) event.dest = cloneLoc(loc);
-        lastOutLoc = cloneLoc(loc);
-        lastSentWall = now;
-        lastForgeType = type;
-    }
-
-    function takeMoveBudget(now) {
-        const elapsed = budgetAt ? Math.max(0, now - budgetAt) : 0;
-        budgetAt = now;
-        const speed = realRunSpeed();
-        const cap = speed * FORGE_BUDGET_CAP_MS / 1000;
-        moveBudget = Math.min(moveBudget + speed * elapsed / 1000 * FORGE_SLACK, cap);
-        forgeStats.lastAllowed = speed;
-        return elapsed;
-    }
-
-    function rememberLocPacket(event) {
-        lastLocPacket = {
-            w: event.w,
-            lookDirection: event.lookDirection,
-            jumpDistance: event.jumpDistance,
-            inShuttle: event.inShuttle,
-            time: event.time,
-        };
-    }
-
-    // Track skill timing for the S_INSTANT_MOVE intercept.
-    // Do NOT modify skill packets — any loc/dest rewriting corrupts the combo
-    // chain validation and causes CR_NOT_CONNECTED_DASHSHOT_SKILL rejections
-    // which produce the snap-back the user feels. Instead we let skills pass
-    // through unmodified and rely on S_INSTANT_MOVE interception to prevent
-    // any server correction from reaching the client as a snap.
-    function onOutgoingSkill(event) {
-        if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) return;
-        if (!event.loc || !lastOutLoc) return;
-        const gap = dist2d(lastOutLoc, event.loc);
-        forgeStats.lastSkillGap = Math.round(gap * 10) / 10;
-        lastSkillAt = Date.now();
-    }
-
-    // The server only gets legal runSpeed distance per real wall-clock
-    // time. dest is always pinned to loc so a 2x look-ahead cannot slip
-    // through. Jump/fall/stop use the same XY budget.
-    function forgeOutgoingLocation(event) {
-        const now = Date.now();
-        const type = Number(event.type);
-        rememberLocPacket(event);
-        if (event.loc) lastRealClientPos = cloneLoc(event.loc);
-
-        if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) {
-            seedForgeLoc(event.loc);
-            lastForgeType = type;
-            return false;
+        lastAnnouncedServer = key;
+        if (s.kind !== 'unknown' || s.host) {
+            const where = s.host ? ` @${s.host}` : '';
+            const idBit = s.id != null ? ` id=${s.id}` : '';
+            log(`playing ${s.label || s.kind}${idBit}${where}`);
         }
-
-
-        forgeStats.packets += 1;
-        forgeStats.lastType = type;
-
-        if (!lastOutLoc) {
-            const from = currentMeLoc();
-            if (from) lastOutLoc = from;
-        }
-        if (!budgetAt) budgetAt = now;
-
-        if (!lastOutLoc) {
-            acceptForgedLoc(event, event.loc, type, now);
-            return event.dest ? true : undefined;
-        }
-
-        const elapsed = takeMoveBudget(now);
-        const dxy = dist2d(lastOutLoc, event.loc);
-        forgeStats.lastDt = elapsed;
-        forgeStats.lastDxy = Math.round(dxy * 10) / 10;
-        forgeStats.lastMax = Math.round(moveBudget * 10) / 10;
-        if (dxy > forgeStats.maxDxy) forgeStats.maxDxy = Math.round(dxy * 10) / 10;
-
-        let loc = event.loc;
-        if (dxy > moveBudget) {
-            loc = clampLoc2d(lastOutLoc, event.loc, moveBudget);
-            forgeStats.clamped += 1;
-            forgeStats.totalDxy += moveBudget;
-            moveBudget = 0;
-        } else {
-            forgeStats.totalDxy += dxy;
-            moveBudget -= dxy;
-        }
-
-        acceptForgedLoc(event, loc, type, now);
-        return true;
+        broadcastUiState();
+        return s;
     }
 
     // ----- identity / combat tracking -----
     mod.hook('S_LOGIN', '*', (event) => {
         myGameId = event.gameId;
         inCombat = false;
-        resetForgeState();
         mounted = false;
         lastMountPacket = null;
         flying = false;
@@ -855,60 +415,25 @@ module.exports = function Speedhack(mod) {
         // during login — that can crash the client or drop the connection.
         lastMoveType = null;
         lastStatUpdate = null;
-        serverRunSpeed = 192;
+        lastLocPacket = null;
         liveHp = null;
         liveMaxHp = null;
         statsFromThisConnection = false;
-        forgeStats.packets = 0;
-        forgeStats.clamped = 0;
-        forgeStats.maxDxy = 0;
-        forgeStats.totalDxy = 0;
         // Always start off when you enter a character. Turn it on with - / spd.
         if (cfg.enabled) setEnabled(false, 'login');
-        // Resolving the policy can run a process probe and a disk scan, so keep
-        // it off the packet handler — a slow path here would stall the proxy
-        // during login. Until it completes the previous policy applies, and the
-        // initial default is forge-on, so nothing is ever left unprotected.
-        mod.setTimeout(() => {
-            const srv = currentServer();
-            const label = srv.name || srv.id || '?';
-            const host = serverHost() || '?';
-            // Only re-discover when we have moved to a different server box.
-            if (policyHost !== host) {
-                policyHost = host;
-                srvCfgPathCache = null;
-                srvCfgCache = null;
-            }
-            refreshServerPolicy();
-            const sc = readServerConfig();
-            if (sc) {
-                log(`server=${label} @${host} — SpeedHack=${sc.speedHackOn ? 'ON' : 'off'} Alt=${sc.speedHackAltOn ? 'ON' : 'off'} avgSpeed=${sc.disconnAvgSpeed || '?'} gap=${sc.gapClientServer || '?'}`);
-            } else {
-                log(`server=${label} @${host} — ServerConfig not reachable (${serverIsLocal() ? 'local' : 'remote'}), using ${serverPolicy.source}`);
-            }
-            log(safeModeActive()
-                ? `forge ON (${serverPolicy.source}) — screen fast, legal steps to server`
-                : `forge OFF (${serverPolicy.source}) — real positions sent, no drift`);
-        }, 0);
-        broadcastUiState();
+        mod.setTimeout(() => announceCurrentServer(), 0);
     });
 
     mod.hook('S_SPAWN_ME', '*', (event) => {
         if (event.gameId) myGameId = event.gameId;
-        // Set the zone-change guard here too — channel changes within the same
-        // zone only fire S_SPAWN_ME (no S_LOAD_TOPO), so without this the guard
-        // is never raised and a pending skill S_INSTANT_MOVE gets wrongly
-        // intercepted, corrupting the forge position and causing an instant kick.
-        isChangingZone = true;
-        // Drop the cached real position: it still points into the previous
-        // channel and must not be used as a redirect target.
-        lastRealClientPos = null;
-        seedForgeLoc(event.loc);
         scheduleStartupIndicator();
-        // 3s, not 1s — a channel switch needs time to fully settle and any
-        // correction arriving during that window must reach the client intact.
-        mod.setTimeout(() => { isChangingZone = false; }, 3000);
+        announceCurrentServer();
     });
+    try {
+        mod.hook('S_GET_USER_LIST', '*', () => {
+            mod.setTimeout(() => announceCurrentServer(), 0);
+        });
+    } catch (_) {}
 
     mod.hook('S_USER_STATUS', '*', (event) => {
         if (!myGameId || !sameId(event.gameId, myGameId)) return;
@@ -932,7 +457,7 @@ module.exports = function Speedhack(mod) {
     try {
         mod.hook('S_EXIT', '*', (event) => {
             diag.lastExit = { category: event.category, code: event.code };
-            log(`S_EXIT category=${event.category} code=${event.code} skillGap=${forgeStats.lastSkillGap} maxDxy=${forgeStats.maxDxy} allow=${forgeStats.lastAllowed}`);
+            log(`S_EXIT category=${event.category} code=${event.code}`);
             writeDisconnectReport('S_EXIT', diag.lastExit);
         });
     } catch (_) {}
@@ -949,14 +474,6 @@ module.exports = function Speedhack(mod) {
     } catch (_) {}
 
     try {
-        mod.hook('S_LOAD_TOPO', '*', (event) => {
-            isChangingZone = true;
-            lastRealClientPos = null;
-            if (event && event.loc) seedForgeLoc(event.loc);
-            else resetForgeState();
-        });
-    } catch (_) {}
-    try {
         mod.hook('S_MOUNT_VEHICLE', '*', { filter: { fake: false } }, (event) => {
             if (myGameId && sameId(event.gameId, myGameId)) {
                 mounted = true;
@@ -972,69 +489,15 @@ module.exports = function Speedhack(mod) {
             }
         });
     } catch (_) {}
-    // Suppress skill-rejected notifications so the client animation plays through
-    // instead of snapping back to the skill start position.
-    // S_CANNOT_START_SKILL / S_ACTION_END with type 6 (= position-check cancel)
-    // are what the server sends when 비정상 위치 변동 rejects a skill mid-animation.
-    // Only suppress a skill cancel that is the fallout of a position rejection,
-    // i.e. one arriving right after we intercepted an S_INSTANT_MOVE correction.
-    // Dropping these unconditionally also swallows normal skill completion and
-    // genuine "cannot use" replies (out of range, no MP, on cooldown), which
-    // desyncs the client's skill state.
-    const CANCEL_SUPPRESS_MS = 1000;
-    function suppressingSkillCancel() {
-        if (!safeModeActive() || !cfg.enabled || effectiveMultiplier() <= 1.0) return false;
-        return (Date.now() - lastCorrectionAt) < CANCEL_SUPPRESS_MS;
-    }
-    try {
-        mod.hook('S_CANNOT_START_SKILL', '*', { filter: { fake: false } }, () => {
-            if (suppressingSkillCancel()) return false;
-        });
-    } catch (_) {}
-    try {
-        mod.hook('S_ACTION_END', '*', { filter: { fake: false } }, (event) => {
-            if (!myGameId || !sameId(event.gameId, myGameId)) return;
-            if (suppressingSkillCancel()) return false;
-        });
-    } catch (_) {}
-
-    try {
-        mod.hook('S_INSTANT_MOVE', '*', { filter: { fake: false } }, (event) => {
-            if (!myGameId || !sameId(event.gameId, myGameId) || !event.loc) return;
-
-            // Intercept ALL S_INSTANT_MOVE during active gameplay and redirect
-            // the client to its real current position so there is no visible
-            // snap-back. The forge stays at the server's destination so the
-            // next C_PLAYER_LOCATION clamps correctly from there.
-            // Zone-change guard is the only exception.
-            if (safeModeActive() && cfg.enabled && effectiveMultiplier() > 1.0 && !isChangingZone) {
-                // A very distant instant-move is a real teleport (channel/zone
-                // change, dungeon entry, GM warp) — never redirect those, or the
-                // client is left behind in the old area and gets kicked.
-                const jump = lastOutLoc ? dist2d(lastOutLoc, event.loc) : Infinity;
-                if (jump > 2000) {
-                    seedForgeLoc(event.loc);
-                    return;
-                }
-                seedForgeLoc(event.loc);
-                // currentMeLoc() can be stale or null in some toolbox builds.
-                // Fall back to lastRealClientPos (cached from last C_PLAYER_LOCATION).
-                // If neither is available, do not redirect — letting the server's
-                // position through is far safer than guessing.
-                const realPos = currentMeLoc() || lastRealClientPos;
-                if (realPos) {
-                    event.loc = cloneLoc(realPos);
-                    lastCorrectionAt = Date.now();
-                    return true;
-                }
-            }
-
-            seedForgeLoc(event.loc);
-        });
-    } catch (_) {}
 
     mod.hook('C_PLAYER_LOCATION', 5, { order: Infinity, filter: { fake: false } }, (event) => {
-        return forgeOutgoingLocation(event) ? true : undefined;
+        lastLocPacket = {
+            w: event.w,
+            lookDirection: event.lookDirection,
+            jumpDistance: event.jumpDistance,
+            inShuttle: event.inShuttle,
+            time: event.time,
+        };
     });
     try {
         mod.hook('C_PLAYER_FLYING_LOCATION', '*', { filter: { fake: false } }, () => {
@@ -1063,11 +526,6 @@ module.exports = function Speedhack(mod) {
             restoreSpeedAfterLand();
         }, 50);
     });
-    for (const name of SKILL_START_PACKETS) {
-        try {
-            mod.hook(name, '*', { order: -20, filter: { fake: false } }, onOutgoingSkill);
-        } catch (_) {}
-    }
 
     // ----- the actual speed hooks -----
     // S_USER_MOVETYPE is the primary signal: the server broadcasts your move
@@ -1097,9 +555,8 @@ module.exports = function Speedhack(mod) {
     mod.hook('S_PLAYER_STAT_UPDATE', '*', { filter: { fake: false } }, (event) => {
         // No gameId on this packet — it's implicitly "me", so safe to
         // always multiply. fake:false so a toggle replay cannot overwrite
-        // lastStatUpdate / serverRunSpeed with already-boosted values.
+        // lastStatUpdate with already-boosted values.
         lastStatUpdate = Object.assign({}, event);
-        cacheRealRunSpeed(event);
         statsFromThisConnection = true;
         diag.lastStatPacketAt = Date.now();
         if (event.hp !== undefined)    liveHp = event.hp;
@@ -1175,13 +632,7 @@ module.exports = function Speedhack(mod) {
                 swim: cfg.fieldMultipliers ? cfg.fieldMultipliers.swimSpeed : null,
             },
             inCombat,
-            safeMode: cfg.safeMode,
-            safeActive: safeModeActive(),
-            lastForgeType,
-            serverRunSpeed,
             mounted,
-            forgeStats,
-            serverPolicy,
             diag,
         };
         try {
@@ -1193,14 +644,6 @@ module.exports = function Speedhack(mod) {
         if (reason === 'S_EXIT') {
             log(`Game exit/kick (category=${extra && extra.category} code=${extra && extra.code}). Report saved.`);
         }
-        // A drop while boosted and unforged is the clearest evidence that this
-        // server polices movement. Remember it so the forge is on next time even
-        // if the config file is unreachable.
-        try {
-            if (cfg.enabled && effectiveMultiplier() > 1.0 && !safeModeActive()) {
-                markServerChecks(true, `disconnect while unforged (${reason})`);
-            }
-        } catch (_) {}
     }
 
     function alreadyInWorld() {
@@ -1235,7 +678,6 @@ module.exports = function Speedhack(mod) {
 
     function currentMoveType() {
         if (lastMoveType && lastMoveType.type != null) return Number(lastMoveType.type);
-        if (lastForgeType != null) return Number(lastForgeType);
         return 7;
     }
 
@@ -1405,7 +847,6 @@ module.exports = function Speedhack(mod) {
     function setEnabled(on, source) {
         const changed = cfg.enabled !== on;
         cfg.enabled = on;
-        if (on && !lastOutLoc) seedForgeLoc(currentMeLoc());
         if (source !== 'login') {
             applyIndicator(on);
             locomotionRefreshPending = true;
@@ -1572,7 +1013,7 @@ module.exports = function Speedhack(mod) {
             const srv = currentServer();
             log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode}`);
             log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
-            log(`safe=${cfg.safeMode} active=${safeModeActive()} forgeType=${lastForgeType} allow=${forgeStats.lastAllowed} skillGap=${forgeStats.lastSkillGap} maxDxy=${forgeStats.maxDxy} clamped=${forgeStats.clamped}/${forgeStats.packets} server=${srv.name || srv.id || '?'}`);
+            log(`server=${srv.label || srv.name || '?'} id=${srv.id != null ? srv.id : '?'} host=${srv.host || '?'} kind=${srv.kind}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
         }
@@ -1664,69 +1105,6 @@ module.exports = function Speedhack(mod) {
             cfg.hotkeyMode = m;
             return log(`hotkeyMode=${m}`);
         }
-        if (sub === 'safe') {
-            const arg = (args[1] || '').toLowerCase();
-            if (!arg) {
-                const srv = currentServer();
-                return log(`safe=${cfg.safeMode} active=${safeModeActive()} via=${serverPolicy.source} forgeType=${lastForgeType} server=${srv.name || srv.id || '?'}`);
-            }
-            if (arg === 'auto' || arg === 'on' || arg === 'off') {
-                cfg.safeMode = arg;
-                refreshServerPolicy();
-                return log(`safeMode=${arg} active=${safeModeActive()} (${serverPolicy.source})`);
-            }
-            if (arg === 'srvcfg' || arg === 'config') {
-                srvCfgCache = null;      // force a fresh parse
-                srvCfgPathCache = null;  // force a fresh discovery
-                const host = serverHost() || '?';
-                log(`server host=${host} (${serverIsLocal() ? 'local' : 'remote'}) key=${serverKey()}`);
-                const c = readServerConfig();
-                if (c) {
-                    log(`config: ${c.path}`);
-                    log(`SpeedHack=${c.speedHackOn ? 'ON' : 'off'} SpeedHackAlt=${c.speedHackAltOn ? 'ON' : 'off'} avgSpeed=${c.disconnAvgSpeed || '?'} gap=${c.gapClientServer || '?'}`);
-                } else {
-                    log('config: not reachable');
-                    if (!serverIsLocal()) log(`tried shares on \\\\${host}\\ — add serverConfigPaths/"serverConfigShares" if it lives elsewhere`);
-                }
-                const decl = declaredServer();
-                log(`declared: ${decl ? (decl.checks ? 'checks movement' : 'does not check movement') : 'no'}`);
-                const prof = serverProfile();
-                const learned = prof.checks === null
-                    ? `unknown (clean ${Math.round((prof.cleanBoostedMs || 0) / 1000)}s / ${PROFILE_CLEAN_MS / 1000}s)`
-                    : (prof.checks ? 'checks movement' : 'does not check movement');
-                log(`learned: ${learned}`);
-                refreshServerPolicy();
-                return log(`=> forge ${safeModeActive() ? 'ON' : 'OFF'} via ${serverPolicy.source} (safeMode=${cfg.safeMode})`);
-            }
-            if (arg === 'declare') {
-                const host = serverHost();
-                if (!host) return log('declare: no server address yet — run this while connected');
-                const v = (args[2] || '').toLowerCase();
-                if (v !== 'on' && v !== 'off' && v !== 'clear') {
-                    return log('usage: spd safe declare on|off|clear   (on = this server checks movement)');
-                }
-                cfg.knownServers = (cfg.knownServers && typeof cfg.knownServers === 'object') ? cfg.knownServers : {};
-                if (v === 'clear') {
-                    delete cfg.knownServers[host];
-                    log(`declaration removed for ${host}`);
-                } else {
-                    const srv = currentServer();
-                    cfg.knownServers[host] = { checks: v === 'on', label: srv.name || String(srv.id || '') };
-                    log(`declared ${host} as ${v === 'on' ? 'checking movement (forge on)' : 'not checking movement (forge off)'}`);
-                }
-                try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
-                refreshServerPolicy();
-                return log(`=> forge ${safeModeActive() ? 'ON' : 'OFF'} via ${serverPolicy.source}`);
-            }
-            if (arg === 'forget') {
-                const all = loadProfiles();
-                delete all[serverKey()];
-                saveProfiles();
-                refreshServerPolicy();
-                return log(`learned profile cleared for ${serverKey()}`);
-            }
-            return log('usage: spd safe [auto|on|off|srvcfg|declare on|off|clear|forget]');
-        }
         if (sub === 'reloadhk') { startAhk(); return; }
         if (sub === 'ui')       { openUi(); return; }
         if (sub === 'reset') {
@@ -1745,6 +1123,7 @@ module.exports = function Speedhack(mod) {
                 if (!next || typeof next !== 'object') return log('reload: config.json missing "data" object');
                 for (const k of Object.keys(cfg)) delete cfg[k];
                 Object.assign(cfg, next);
+                stripRemovedSettings();
                 if (uiWindow && !uiWindow.isDestroyed()) {
                     uiWindow.webContents.send('spd-config', JSON.parse(JSON.stringify(cfg)));
                 }
@@ -1756,7 +1135,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | safe [auto|on|off] | reloadhk | ui | reload');
+        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | reload');
     });
 
     // ===== GUI window =====
@@ -1902,7 +1281,7 @@ module.exports = function Speedhack(mod) {
             const knownKeys = [
                 'enabled', 'multiplier', 'autoDisableInCombat',
                 'showIndicator', 'indicatorAbnormalityId', 'triggerItemId',
-                'hotkey', 'hotkeyMode', 'ahkPath', 'safeMode',
+                'hotkey', 'hotkeyMode', 'ahkPath',
             ];
             for (const k of knownKeys) {
                 if (incoming[k] !== undefined && incoming[k] !== cfg[k]) cfg[k] = incoming[k];
@@ -1915,7 +1294,6 @@ module.exports = function Speedhack(mod) {
                 if (cfg.enabled) replayCachedMoveAt();
             }
             try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
-            if (incoming.safeMode !== undefined) broadcastUiState();
             if (incoming.hotkey !== undefined || incoming.hotkeyMode !== undefined || incoming.ahkPath !== undefined) {
                 startAhk();
             }
@@ -1974,32 +1352,18 @@ module.exports = function Speedhack(mod) {
             uiWindow.webContents.send('spd-state', {
                 enabled: cfg.enabled,
                 multiplier: cfg.multiplier,
-                safeMode: cfg.safeMode,
                 server: guiServerInfo(),
             });
         } catch (_) {}
     }
 
     // ===== boot =====
-    refreshServerPolicy();
-    // Accrue "clean" time only while actually boosted with the forge off, so a
-    // server can earn a "does not check movement" verdict on its own.
-    const CLEAN_TICK_MS = 15000;
-    const cleanTimer = mod.setInterval(() => {
-        try {
-            if (cfg.safeMode !== 'auto') return;
-            if (!cfg.enabled || effectiveMultiplier() <= 1.0) return;
-            if (safeModeActive()) return;          // forged: proves nothing
-            if (!alreadyInWorld()) return;
-            creditCleanTime(CLEAN_TICK_MS);
-        } catch (_) {}
-    }, CLEAN_TICK_MS);
-
     if (cfg.hotkey && cfg.hotkey.trim()) startAhk();
     registerUiHotkey();
     grabGameId();
     loadRuntimeCache();
     syncMountedFromGame();
+    announceCurrentServer();
     // Do not inject cached stat/move packets or fake buffs at construct time
     // during login — a stale STAT_UPDATE drops the client. Mid-session reload
     // is safe: we are already in the world with this character's cache.
@@ -2015,7 +1379,6 @@ module.exports = function Speedhack(mod) {
     }
 
     this.destructor = () => {
-        if (cleanTimer) { try { mod.clearInterval(cleanTimer); } catch (_) {} }
         if (landSpeedRestoreTimer) {
             try { mod.clearTimeout(landSpeedRestoreTimer); } catch (_) {}
             landSpeedRestoreTimer = null;
@@ -2025,7 +1388,6 @@ module.exports = function Speedhack(mod) {
             replayRetryTimer = null;
         }
         saveRuntimeCache();
-        resetForgeState();
         try { if (statsFromThisConnection) applyIndicator(false); } catch (_) {}
         try { replayCachedMoveAt(1.0); } catch (_) {}
         stopAhk();

@@ -1,7 +1,7 @@
 {
     "disableAutoUpdate": false,
     "name": "speedhack",
-    "version": "2.55",
+    "version": "2.56",
     "author": "ballzyxx",
     "description": "Move-speed multiplier with GUI, AHK hotkey, instant reload restore, and per-field walk/run/mount/swim overrides",
     "servers": [
@@ -11,7 +11,7 @@
         "cliName": "Speedhack",
         "guiName": "Speedhack",
         "reloadable": true,
-        "settingsVersion": 4,
+        "settingsVersion": 5,
         "settingsFile": "config.json",
         "settingsMigrator": "settings_migrator.js"
     }

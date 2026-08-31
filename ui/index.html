@@ -179,7 +179,7 @@
 <div class="section-title">Core</div>
 <div class="card">
     <div class="row">
-        <div class="label">Server<small id="serverMode">Log in to detect Asura or Agaia</small></div>
+        <div class="label">Server<small id="serverMode">Connect and it reads the live server list, id, and IP</small></div>
         <span id="serverName" style="color: var(--muted); font-size: 12px; text-align: right;">Not logged in</span>
     </div>
     <div class="row">
@@ -250,17 +250,6 @@
         <div class="label">Auto-disable in combat<small>Drops to 1.0 when you enter combat to avoid validators</small></div>
         <div id="t_autoDisableInCombat" class="toggle" data-key="autoDisableInCombat"></div>
     </div>
-    <div class="row">
-            <div class="label">Safe movement<small id="safeModeHint">Auto reads the server's ServerConfig.xml and only forges when the server actually checks movement.</small></div>
-        <div class="slider-row">
-            <span id="safeActivePill" class="status-pill unknown">—</span>
-            <select id="s_safeMode" data-key="safeMode">
-                <option value="auto">auto</option>
-                <option value="on">on</option>
-                <option value="off">off</option>
-            </select>
-        </div>
-    </div>
 </div>
 
 <div class="section-title">Indicator</div>
@@ -308,7 +297,7 @@
     const { ipcRenderer } = require('electron');
 
     let cfg = {};
-    let serverInfo = { name: 'Not logged in', kind: 'unknown', forge: false };
+    let serverInfo = { name: 'Not logged in', kind: 'unknown' };
     let saveTimer = null;
 
     const PRESETS = { walk: 1.5, jog: 2.5, sprint: 4.0, dash: 6.0, yeet: 10.0 };
@@ -379,36 +368,25 @@
 
         const sp = document.getElementById('serverPill');
         const kind = (serverInfo && serverInfo.kind) || 'unknown';
-        const kindLabel = kind === 'asura' ? 'Asura' : kind === 'agaia' ? 'Agaia' : (serverInfo && serverInfo.id != null ? 'Server' : 'Offline');
-        sp.textContent = kindLabel;
-        sp.className = 'status-pill ' + (kind === 'asura' || kind === 'agaia' ? kind : 'unknown');
+        const pillLabel = kind === 'asura' ? 'Asura'
+            : kind === 'agaia' ? 'Agaia'
+            : kind === 'private' ? ((serverInfo.label && !/^Server\s/.test(serverInfo.label) && serverInfo.label !== serverInfo.host) ? serverInfo.label : 'Private')
+            : 'Offline';
+        sp.textContent = pillLabel;
+        sp.className = 'status-pill ' + (kind === 'asura' || kind === 'agaia' ? kind : (kind === 'private' ? 'on' : 'unknown'));
         const nameEl = document.getElementById('serverName');
         const modeEl = document.getElementById('serverMode');
         if (nameEl) nameEl.textContent = (serverInfo && serverInfo.name) || 'Not logged in';
         if (modeEl) {
-            if (kind === 'agaia' && !serverInfo.forge) modeEl.textContent = 'Raw 2.0x, no clamp';
-            else if (kind === 'asura' || serverInfo.forge) modeEl.textContent = '2.0x + instant hits, clamp on';
-            else modeEl.textContent = 'Log in to detect Asura or Agaia';
-        }
-
-        const safePill = document.getElementById('safeActivePill');
-        const safeHint = document.getElementById('safeModeHint');
-        if (safePill) {
-            if (serverInfo && serverInfo.forge) {
-                safePill.textContent = 'ON';
-                safePill.className = 'status-pill on';
-            } else if (kind === 'unchecked' || kind === 'agaia' || (serverInfo && serverInfo.forge === false && kind !== 'unknown')) {
-                safePill.textContent = 'OFF';
-                safePill.className = 'status-pill off';
+            if (kind === 'unknown') {
+                modeEl.textContent = 'Connect and it reads the live server list, id, and IP';
             } else {
-                safePill.textContent = '—';
-                safePill.className = 'status-pill unknown';
+                const bits = [];
+                if (serverInfo.host) bits.push(serverInfo.host);
+                if (serverInfo.id != null) bits.push('id ' + serverInfo.id);
+                if (kind === 'asura' || kind === 'agaia') bits.push('live');
+                modeEl.textContent = bits.join(' · ') || 'Detected';
             }
-        }
-        if (safeHint) {
-            if (kind === 'agaia') safeHint.textContent = 'Agaia detected — clamp is OFF (raw 2.0x). Auto stays selected.';
-            else if (kind === 'asura') safeHint.textContent = 'Asura detected — clamp is ON (2.0x + instant hits). Auto stays selected.';
-            else safeHint.textContent = 'Auto detects the server. Agaia = off. Asura = on.';
         }
     }
 
@@ -523,7 +501,6 @@
         if (state) {
             if (state.enabled !== undefined)    cfg.enabled = state.enabled;
             if (state.multiplier !== undefined) cfg.multiplier = state.multiplier;
-            if (state.safeMode !== undefined)   cfg.safeMode = state.safeMode;
             if (state.server) serverInfo = state.server;
         }
         refreshUi();
