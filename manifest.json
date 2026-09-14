@@ -1,0 +1,11 @@
+{
+    "files": {
+        "CHANGELOG.md": "8dee0821c58f1f3745711da0f9cdb640c27ea246ccd061f6bfd9d1d9320eedd1",
+        "ahk/hotkey.template.ahk": "5fa90d24997bc6fc31265c5cba196ec63611fddcd2c4ecc1abfcc759b20b87ae",
+        "index.js": "8870986cf4923720751afcb034fa77b906274effb26182d52353878d220abe5c",
+        "module.json": "7ccff051043e7f3c927ba918198c5628c6ab5a894cf4c9d5230f0401a9243aa8",
+        "settings_migrator.js": "5be881b2db28817db25da694a8313ef00c836eb59e6305a18f39387d5beed7d4",
+        "settings_structure.js": "701bcf5bcb28e20a5fbec8a16e0dac9b1d42c3e05f32cdc1fd798e7f7250ecba",
+        "ui/index.html": "d00a507b9d7e6a9a7ef58fc977520215b6087749cce4f5c978adc0839b098897"
+    }
+}

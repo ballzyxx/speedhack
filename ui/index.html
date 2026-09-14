@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Speedhack</title>
+<style>
+    :root {
+        --bg: #1b1d22;
+        --panel: #24272d;
+        --panel-2: #2c2f37;
+        --border: #3a3e47;
+        --text: #e4e6eb;
+        --muted: #8a8f99;
+        --accent: #ffb86b;
+        --accent-dim: #553a20;
+        --on: #4ade80;
+        --off: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0; padding: 0;
+        height: 100%;
+        font-family: 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px;
+        background: var(--bg);
+        color: var(--text);
+        user-select: none;
+        overflow: auto;
+    }
+    .wrap { padding: 14px; min-height: 100%; box-sizing: border-box; }
+    h1 {
+        margin: 0 0 12px 0;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        color: var(--accent);
+    }
+    .status-pill {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
+    .status-pill.on  { background: rgba(74, 222, 128, 0.15); color: var(--on); border: 1px solid var(--on); }
+    .status-pill.off { background: rgba(239, 68, 68, 0.15);  color: var(--off); border: 1px solid var(--off); }
+    .status-pill.asura { background: rgba(255, 184, 107, 0.18); color: var(--accent); border: 1px solid var(--accent); }
+    .status-pill.agaia { background: rgba(96, 165, 250, 0.18); color: #60a5fa; border: 1px solid #60a5fa; }
+    .status-pill.unknown { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+    .mult-pill {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 6px;
+        vertical-align: middle;
+        background: rgba(255, 184, 107, 0.15);
+        color: var(--accent);
+        border: 1px solid var(--accent-dim);
+    }
+    .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+    }
+    .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0;
+        gap: 10px;
+    }
+    .row + .row { border-top: 1px solid var(--border); }
+    .label {
+        flex: 1;
+        font-size: 12px;
+        color: var(--text);
+    }
+    .label small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: normal;
+        margin-top: 2px;
+    }
+    .toggle {
+        position: relative;
+        width: 36px; height: 20px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+        flex-shrink: 0;
+    }
+    .toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px; left: 2px;
+        width: 14px; height: 14px;
+        background: var(--muted);
+        border-radius: 50%;
+        transition: transform 0.15s, background 0.15s;
+    }
+    .toggle.on { background: var(--accent-dim); border-color: var(--accent); }
+    .toggle.on::after { transform: translateX(16px); background: var(--accent); }
+    input[type="number"], input[type="text"] {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-family: inherit;
+        font-size: 12px;
+        width: 90px;
+        text-align: right;
+    }
+    input[type="text"] { width: 130px; text-align: left; }
+    input:focus { outline: none; border-color: var(--accent); }
+    .slider-row { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    input[type="range"] { flex: 1; min-width: 80px; accent-color: var(--accent); }
+    select {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-family: inherit;
+    }
+    button {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 12px;
+        cursor: pointer;
+    }
+    button:hover { background: var(--accent-dim); border-color: var(--accent); }
+    button.primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+    button.primary:hover { background: var(--accent); color: #000; }
+    .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 6px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+    }
+    .footer .hint { font-size: 11px; color: var(--muted); }
+    .section-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        margin: 12px 0 4px 0;
+        padding-left: 2px;
+    }
+    .section-title:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>
+    Speedhack
+    <span id="statusPill" class="status-pill off">OFF</span>
+    <span id="multPill" class="mult-pill">1.0x</span>
+    <span id="serverPill" class="status-pill unknown">Offline</span>
+</h1>
+
+<div class="section-title">Core</div>
+<div class="card">
+    <div class="row">
+        <div class="label">Server<small id="serverMode">Connect and it reads the live server list, id, and IP</small></div>
+        <span id="serverName" style="color: var(--muted); font-size: 12px; text-align: right;">Not logged in</span>
+    </div>
+    <div class="row">
+        <div class="label">Enabled<small>Master switch (same as <code>/8 spd</code>)</small></div>
+        <div id="t_enabled" class="toggle" data-key="enabled"></div>
+    </div>
+    <div class="row">
+        <div class="label">Multiplier<small>1.0 = off, max 10.0 (clamped). Also try a preset below.</small></div>
+        <div class="slider-row">
+            <input id="r_mult" type="range" min="1" max="10" step="0.1">
+            <input id="n_mult" type="number" min="1" max="10" step="0.1">
+        </div>
+    </div>
+    <div class="row">
+        <div class="label">Preset<small>Quick speed levels. Picks one and updates the slider.</small></div>
+        <select id="s_preset">
+            <option value="">(custom)</option>
+            <option value="walk">Walk — 1.5x</option>
+            <option value="jog">Jog — 2.5x</option>
+            <option value="sprint">Sprint — 4x</option>
+            <option value="dash">Dash — 6x</option>
+            <option value="yeet">Yeet — 10x (max)</option>
+        </select>
+    </div>
+</div>
+
+<div class="section-title">Per-type overrides</div>
+<div class="card">
+    <div class="row" style="display:block; padding:0 0 6px 0; border:none;">
+        <div class="label" style="margin-bottom:4px;">
+            Override individual speed types
+            <small>Leave any toggle <strong>off</strong> to use the master multiplier above. Turn one on and set its number to override that type only.</small>
+        </div>
+    </div>
+    <div class="row">
+        <div class="label">Walk speed<small>Slow movement / sneaking</small></div>
+        <div class="slider-row">
+            <div class="toggle" data-fmtoggle="walkSpeed"></div>
+            <input type="number" min="1" max="10" step="0.1" data-fmkey="walkSpeed">
+        </div>
+    </div>
+    <div class="row">
+        <div class="label">Run speed<small>Default movement (the main one you'll usually want)</small></div>
+        <div class="slider-row">
+            <div class="toggle" data-fmtoggle="runSpeed"></div>
+            <input type="number" min="1" max="10" step="0.1" data-fmkey="runSpeed">
+        </div>
+    </div>
+    <div class="row">
+        <div class="label">Mount speed<small>While riding any mount</small></div>
+        <div class="slider-row">
+            <div class="toggle" data-fmtoggle="mountSpeed"></div>
+            <input type="number" min="1" max="10" step="0.1" data-fmkey="mountSpeed">
+        </div>
+    </div>
+    <div class="row">
+        <div class="label">Swim speed<small>In water (some patches don't broadcast this — try it)</small></div>
+        <div class="slider-row">
+            <div class="toggle" data-fmtoggle="swimSpeed"></div>
+            <input type="number" min="1" max="10" step="0.1" data-fmkey="swimSpeed">
+        </div>
+    </div>
+</div>
+
+<div class="section-title">Safety</div>
+<div class="card">
+    <div class="row">
+        <div class="label">Auto-disable in combat<small>Drops to 1.0 when you enter combat to avoid validators</small></div>
+        <div id="t_autoDisableInCombat" class="toggle" data-key="autoDisableInCombat"></div>
+    </div>
+    <div class="row">
+        <div class="label">Mode 1<small>If enabled: foot/ground is type 1, mount is type 7, flying is type 7. Only one mode at a time.</small></div>
+        <div id="t_flyLocInject" class="toggle" data-key="flyLocInject"></div>
+    </div>
+    <div class="row">
+        <div class="label">Mode 2<small>If enabled: foot/ground is type 8, mount is type 7, flying is type 7. Only one mode at a time.</small></div>
+        <div id="t_flyLocFoot8" class="toggle" data-key="flyLocFoot8"></div>
+    </div>
+    <div class="row">
+        <div class="label">Mode 3<small>If enabled: foot/ground is type 3, mount is type 7, flying is type 7. Only one mode at a time.</small></div>
+        <div id="t_flyLocFoot3" class="toggle" data-key="flyLocFoot3"></div>
+    </div>
+    <div class="row">
+        <div class="label">Mode 4<small>If enabled: foot/ground is type 7, mount is type 7, flying is type 7. Only one mode at a time.</small></div>
+        <div id="t_flyLocFoot7" class="toggle" data-key="flyLocFoot7"></div>
+    </div>
+</div>
+
+<div class="section-title">Ground loc types</div>
+<div class="card">
+    <div class="row">
+        <div class="label">Run / walk / mount<small>Working: type 2 (fall) on the ground. In the air, fly packets become type 7. Leave Mode 1–4 off.</small></div>
+        <select id="s_groundLocType">
+            <option value="-1">Off — real type</option>
+            <option value="0">0 — run</option>
+            <option value="1">1 — walk</option>
+            <option value="2">2 — fall (holds)</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5 — jump</option>
+            <option value="6">6</option>
+            <option value="7">7 — stop</option>
+            <option value="8">8</option>
+        </select>
+    </div>
+    <div class="row">
+        <div class="label">Jump only<small>Hide = type 2 on the floor (no jump arc). Or try a type just for jumps. Run/walk stay 2.</small></div>
+        <select id="s_jumpLocType">
+            <option value="-2">Hide — floor as type 2</option>
+            <option value="-1">Real jump (type 5)</option>
+            <option value="0">0 — run</option>
+            <option value="1">1 — walk</option>
+            <option value="2">2 — fall (type only)</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5 — jump</option>
+            <option value="6">6</option>
+            <option value="7">7 — stop</option>
+            <option value="8">8</option>
+        </select>
+    </div>
+</div>
+
+<div class="section-title">Indicator</div>
+<div class="card">
+    <div class="row">
+        <div class="label">Show buff icon<small>Self-only abnormality, signals when Speedhack is active</small></div>
+        <div id="t_showIndicator" class="toggle" data-key="showIndicator"></div>
+    </div>
+    <div class="row">
+        <div class="label">Abnormality ID<small>Same suggestions as the inv mod work here</small></div>
+        <input id="n_indicatorAbnormalityId" type="number" min="1" max="9999999" data-key="indicatorAbnormalityId">
+    </div>
+</div>
+
+<div class="section-title">Hotkey & triggers</div>
+<div class="card">
+    <div class="row">
+        <div class="label">AHK hotkey<small>Blank = off. <code>-</code> also binds numpad minus. Or <code>NumpadSub</code>, <code>NumpadAdd</code>, <code>xbutton1</code></small></div>
+        <input id="s_hotkey" type="text" data-key="hotkey" placeholder="(disabled)">
+    </div>
+    <div class="row">
+        <div class="label">Hotkey mode<small>"hold" = active only while pressed; "toggle" = press to flip</small></div>
+        <select id="s_hotkeyMode" data-key="hotkeyMode">
+            <option value="hold">hold</option>
+            <option value="toggle">toggle</option>
+        </select>
+    </div>
+    <div class="row">
+        <div class="label">Trigger item ID<small>Item that toggles when used. 0 = disabled.</small></div>
+        <input id="n_triggerItemId" type="number" min="0" max="999999" data-key="triggerItemId">
+    </div>
+</div>
+
+<div class="footer">
+    <span class="hint">Changes save automatically. Ctrl+Shift+S to toggle window.</span>
+    <div>
+        <button id="btn_reloadhk">Reload hotkey</button>
+        <button id="btn_close" class="primary">Close</button>
+    </div>
+</div>
+
+</div>
+
+<script>
+    const { ipcRenderer } = require('electron');
+
+    let cfg = {};
+    let serverInfo = { name: 'Not logged in', kind: 'unknown' };
+    let saveTimer = null;
+
+    const PRESETS = { walk: 1.5, jog: 2.5, sprint: 4.0, dash: 6.0, yeet: 10.0 };
+
+    function setToggle(el, on) { el.classList.toggle('on', !!on); }
+
+    // ---- field-multiplier (per-type) helpers ----
+    function fmGet(k) {
+        return (cfg.fieldMultipliers && cfg.fieldMultipliers[k] !== undefined)
+            ? cfg.fieldMultipliers[k]
+            : null;
+    }
+    function fmSet(k, v) {
+        if (!cfg.fieldMultipliers) cfg.fieldMultipliers = {};
+        cfg.fieldMultipliers[k] = v;
+    }
+
+    function detectActivePreset() {
+        const m = Number(cfg.multiplier);
+        for (const [name, v] of Object.entries(PRESETS)) {
+            if (Math.abs(m - v) < 0.0001) return name;
+        }
+        return '';
+    }
+
+    function refreshUi() {
+        // Top-level toggles
+        const flyMode = Number(cfg.flyLocMode) || (
+            cfg.flyLocFoot7 ? 4 : (cfg.flyLocFoot3 ? 3 : (cfg.flyLocFoot8 && cfg.flyLocInject ? 2 : (cfg.flyLocInject ? 1 : 0)))
+        );
+        document.querySelectorAll('.toggle[data-key]').forEach(el => {
+            if (el.dataset.key === 'flyLocInject') setToggle(el, flyMode === 1);
+            else if (el.dataset.key === 'flyLocFoot8') setToggle(el, flyMode === 2);
+            else if (el.dataset.key === 'flyLocFoot3') setToggle(el, flyMode === 3);
+            else if (el.dataset.key === 'flyLocFoot7') setToggle(el, flyMode === 4);
+            else setToggle(el, !!cfg[el.dataset.key]);
+        });
+        // Top-level inputs
+        document.querySelectorAll('input[data-key], select[data-key]').forEach(el => {
+            const k = el.dataset.key;
+            if (cfg[k] === undefined) return;
+            el.value = cfg[k];
+        });
+        // Multiplier slider mirror
+        const r = document.getElementById('r_mult');
+        const n = document.getElementById('n_mult');
+        if (r && cfg.multiplier != null) r.value = Math.max(1, Math.min(10, cfg.multiplier));
+        if (n && cfg.multiplier != null) n.value = cfg.multiplier;
+
+        // Preset dropdown
+        const presetEl = document.getElementById('s_preset');
+        if (presetEl) presetEl.value = detectActivePreset();
+        const locTypeEl = document.getElementById('s_groundLocType');
+        if (locTypeEl) {
+            const t = cfg.groundLocType == null ? -1 : Number(cfg.groundLocType);
+            locTypeEl.value = String(Number.isFinite(t) ? t : -1);
+        }
+        const jumpTypeEl = document.getElementById('s_jumpLocType');
+        if (jumpTypeEl) {
+            const t = cfg.jumpLocType == null ? -2 : Number(cfg.jumpLocType);
+            jumpTypeEl.value = String(Number.isFinite(t) ? t : -2);
+        }
+
+        // Per-type overrides
+        document.querySelectorAll('input[data-fmkey]').forEach(el => {
+            const k = el.dataset.fmkey;
+            const v = fmGet(k);
+            el.value = (v === null || v === undefined) ? '' : v;
+        });
+        document.querySelectorAll('.toggle[data-fmtoggle]').forEach(el => {
+            const k = el.dataset.fmtoggle;
+            const v = fmGet(k);
+            const on = (v !== null && v !== undefined && Number.isFinite(Number(v)));
+            setToggle(el, on);
+            const input = document.querySelector(`input[data-fmkey="${k}"]`);
+            if (input) input.disabled = !on;
+        });
+
+        // Status pills
+        const pill = document.getElementById('statusPill');
+        pill.textContent = cfg.enabled ? 'ON' : 'OFF';
+        pill.className = 'status-pill ' + (cfg.enabled ? 'on' : 'off');
+        const mp = document.getElementById('multPill');
+        mp.textContent = (cfg.multiplier != null ? Number(cfg.multiplier).toFixed(1) : '1.0') + 'x';
+
+        const sp = document.getElementById('serverPill');
+        const kind = (serverInfo && serverInfo.kind) || 'unknown';
+        const pillLabel = kind === 'asura' ? 'Asura'
+            : kind === 'agaia' ? 'Agaia'
+            : kind === 'private' ? ((serverInfo.label && !/^Server\s/.test(serverInfo.label) && serverInfo.label !== serverInfo.host) ? serverInfo.label : 'Private')
+            : 'Offline';
+        sp.textContent = pillLabel;
+        sp.className = 'status-pill ' + (kind === 'asura' || kind === 'agaia' ? kind : (kind === 'private' ? 'on' : 'unknown'));
+        const nameEl = document.getElementById('serverName');
+        const modeEl = document.getElementById('serverMode');
+        if (nameEl) nameEl.textContent = (serverInfo && serverInfo.name) || 'Not logged in';
+        if (modeEl) {
+            if (kind === 'unknown') {
+                modeEl.textContent = 'Connect and it reads the live server list, id, and IP';
+            } else {
+                const bits = [];
+                if (serverInfo.host) bits.push(serverInfo.host);
+                if (serverInfo.id != null) bits.push('id ' + serverInfo.id);
+                if (kind === 'asura' || kind === 'agaia') bits.push('live');
+                modeEl.textContent = bits.join(' · ') || 'Detected';
+            }
+        }
+    }
+
+    function scheduleSave() {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => ipcRenderer.send('spd-save', cfg), 150);
+    }
+
+    // ---- toggles ----
+    document.querySelectorAll('.toggle').forEach(el => {
+        if (el.dataset.fmtoggle) return; // handled by per-type override section below
+        el.addEventListener('click', () => {
+            const k = el.dataset.key;
+            if (k === 'flyLocInject' || k === 'flyLocFoot8' || k === 'flyLocFoot3' || k === 'flyLocFoot7') {
+                const current = Number(cfg.flyLocMode) || (
+                    cfg.flyLocFoot7 ? 4 : (cfg.flyLocFoot3 ? 3 : (cfg.flyLocFoot8 && cfg.flyLocInject ? 2 : (cfg.flyLocInject ? 1 : 0)))
+                );
+                const clicked = k === 'flyLocFoot7' ? 4 : (k === 'flyLocFoot3' ? 3 : (k === 'flyLocFoot8' ? 2 : 1));
+                const next = current === clicked ? 0 : clicked;
+                cfg.flyLocMode = next;
+                cfg.flyLocInject = next !== 0;
+                cfg.flyLocFoot8 = next === 2;
+                cfg.flyLocFoot3 = next === 3;
+                cfg.flyLocFoot7 = next === 4;
+                if (next !== 0) cfg.groundLocType = -1;
+                refreshUi();
+                scheduleSave();
+                return;
+            }
+            cfg[k] = !cfg[k];
+            setToggle(el, cfg[k]);
+            scheduleSave();
+            if (k === 'enabled') {
+                ipcRenderer.send('spd-toggle', cfg.enabled);
+                refreshUi();
+            }
+        });
+    });
+
+    // ---- inputs ----
+    document.querySelectorAll('input[type="number"], input[type="text"]').forEach(el => {
+        if (el.id === 'n_mult' || el.id === 'r_mult') return; // multiplier — handled below
+        if (el.dataset.fmkey) return; // per-type override — handled below
+        el.addEventListener('input', () => {
+            const k = el.dataset.key;
+            const v = el.type === 'number' ? Number(el.value) : el.value;
+            cfg[k] = v;
+            scheduleSave();
+        });
+    });
+    document.querySelectorAll('select[data-key]').forEach(el => {
+        el.addEventListener('change', () => {
+            cfg[el.dataset.key] = el.value;
+            scheduleSave();
+        });
+    });
+
+    // ---- multiplier (live update via dedicated IPC, no save throttle) ----
+    function pushMultiplier(v) {
+        const clamped = Math.max(1, Math.min(10, Number(v) || 1));
+        cfg.multiplier = Math.round(clamped * 10) / 10;
+        document.getElementById('multPill').textContent = cfg.multiplier.toFixed(1) + 'x';
+        ipcRenderer.send('spd-mult', cfg.multiplier);
+        // Mirror the two inputs without re-firing events.
+        document.getElementById('r_mult').value = cfg.multiplier;
+        document.getElementById('n_mult').value = cfg.multiplier;
+        // Dropdown reflects custom vs preset
+        document.getElementById('s_preset').value = detectActivePreset();
+    }
+    document.getElementById('r_mult').addEventListener('input', (e) => pushMultiplier(e.target.value));
+    document.getElementById('n_mult').addEventListener('input', (e) => pushMultiplier(e.target.value));
+
+    // ---- preset dropdown ----
+    document.getElementById('s_groundLocType').addEventListener('change', (e) => {
+        const n = Number(e.target.value);
+        cfg.groundLocType = Number.isFinite(n) ? n : -1;
+        if (cfg.groundLocType >= 0) {
+            cfg.flyLocMode = 0;
+            cfg.flyLocInject = false;
+            cfg.flyLocFoot8 = false;
+            cfg.flyLocFoot3 = false;
+            cfg.flyLocFoot7 = false;
+        }
+        refreshUi();
+        scheduleSave();
+    });
+
+    document.getElementById('s_jumpLocType').addEventListener('change', (e) => {
+        const n = Number(e.target.value);
+        cfg.jumpLocType = Number.isFinite(n) ? n : -1;
+        refreshUi();
+        scheduleSave();
+    });
+
+    // ---- preset dropdown ----
+    document.getElementById('s_preset').addEventListener('change', (e) => {
+        const name = e.target.value;
+        if (!name) return;
+        ipcRenderer.send('spd-preset', name);
+        cfg.multiplier = PRESETS[name];
+        refreshUi();
+    });
+
+    // ---- per-type override toggles ----
+    document.querySelectorAll('.toggle[data-fmtoggle]').forEach(el => {
+        el.addEventListener('click', () => {
+            const k = el.dataset.fmtoggle;
+            const wasOn = el.classList.contains('on');
+            if (wasOn) {
+                fmSet(k, null);
+            } else {
+                // Restore: prefer the value already typed in, fall back to master multiplier.
+                const input = document.querySelector(`input[data-fmkey="${k}"]`);
+                let v = input ? Number(input.value) : NaN;
+                if (!Number.isFinite(v) || v < 1 || v > 10) v = Number(cfg.multiplier) || 2;
+                fmSet(k, v);
+            }
+            refreshUi();
+            scheduleSave();
+        });
+    });
+
+    // ---- per-type override numeric inputs ----
+    document.querySelectorAll('input[data-fmkey]').forEach(el => {
+        el.addEventListener('input', () => {
+            const k = el.dataset.fmkey;
+            const raw = el.value;
+            const v = raw === '' ? null : Number(raw);
+            fmSet(k, (v !== null && Number.isFinite(v)) ? Math.max(1, Math.min(10, v)) : null);
+            // Sync the matching toggle
+            const tog = document.querySelector(`.toggle[data-fmtoggle="${k}"]`);
+            if (tog) {
+                const on = (cfg.fieldMultipliers && cfg.fieldMultipliers[k] !== null && cfg.fieldMultipliers[k] !== undefined);
+                setToggle(tog, on);
+            }
+            scheduleSave();
+        });
+    });
+
+    // ---- buttons ----
+    document.getElementById('btn_reloadhk').addEventListener('click', () => ipcRenderer.send('spd-reloadhk'));
+    document.getElementById('btn_close').addEventListener('click', () => window.close());
+
+    // ---- ipc ----
+    ipcRenderer.on('spd-config', (_evt, data) => {
+        cfg = data || {};
+        refreshUi();
+    });
+    ipcRenderer.on('spd-state', (_evt, state) => {
+        if (state) {
+            if (state.enabled !== undefined)    cfg.enabled = state.enabled;
+            if (state.multiplier !== undefined) cfg.multiplier = state.multiplier;
+            if (state.flyLocInject !== undefined) cfg.flyLocInject = state.flyLocInject;
+            if (state.flyLocFoot8 !== undefined) cfg.flyLocFoot8 = state.flyLocFoot8;
+            if (state.flyLocFoot3 !== undefined) cfg.flyLocFoot3 = state.flyLocFoot3;
+            if (state.flyLocFoot7 !== undefined) cfg.flyLocFoot7 = state.flyLocFoot7;
+            if (state.flyLocMode !== undefined) cfg.flyLocMode = state.flyLocMode;
+            if (state.groundLocType !== undefined) cfg.groundLocType = state.groundLocType;
+            if (state.jumpLocType !== undefined) cfg.jumpLocType = state.jumpLocType;
+            if (state.server) serverInfo = state.server;
+        }
+        refreshUi();
+    });
+
+    ipcRenderer.send('spd-request-config');
+</script>
+</body>
+</html>
