@@ -36,10 +36,6 @@
  *   spd hotkeymode toggle|hold
  *   spd reloadhk              → restart AHK watcher
  *   spd ui                    → open the GUI (also Ctrl+Shift+S)
- *   spd flytest on|off        → flying-loc mode (same as the GUI tick)
- *   spd flytest type <n|auto> → flying packet type (7=descend)
- *   spd loctype <0..8|off>    → rewrite run/walk C_PLAYER_LOCATION type
- *   spd jumptype <0..8|off|hide> → jump packets only (hide = floor as type 2)
  *   spd rl | reload           → reload this module (picks up index.js / GUI edits)
  *   spd reloadcfg             → re-read config.json only (does not load new code)
  */
@@ -239,19 +235,12 @@ module.exports = function Speedhack(mod) {
         if (cfg.flyLocFoot8) return 2;
         return 1;
     }
-    function syncFlyLocTypeLabel() {
-        const m = currentFlyMode();
-        cfg.flyLocType = m === 2 ? 8 : (m === 3 ? 3 : (m === 4 ? 7 : 1));
-    }
-    function setFlyMode(mode) {
-        const m = (mode === 1 || mode === 2 || mode === 3 || mode === 4) ? mode : 0;
-        cfg.flyLocMode = m;
-        cfg.flyLocInject = m !== 0;
-        cfg.flyLocFoot8 = m === 2;
-        cfg.flyLocFoot3 = m === 3;
-        cfg.flyLocFoot7 = m === 4;
-        syncFlyLocTypeLabel();
-        if (m !== 0) cfg.groundLocType = -1;
+    function setFlyMode(_mode) {
+        cfg.flyLocMode = 0;
+        cfg.flyLocInject = false;
+        cfg.flyLocFoot8 = false;
+        cfg.flyLocFoot3 = false;
+        cfg.flyLocFoot7 = false;
     }
     function currentGroundLocType() {
         const n = Number(cfg.groundLocType);
@@ -267,16 +256,13 @@ module.exports = function Speedhack(mod) {
     }
     function setGroundLocType(type) {
         const n = Number(type);
-        const v = (Number.isFinite(n) && n >= 0 && n <= 8) ? n : -1;
-        cfg.groundLocType = v;
-        if (v >= 0) {
-            cfg.flyLocMode = 0;
-            cfg.flyLocInject = false;
-            cfg.flyLocFoot8 = false;
-            cfg.flyLocFoot3 = false;
-            cfg.flyLocFoot7 = false;
-            syncFlyLocTypeLabel();
-        }
+        const original = type === 'off' || type === 'original' || type === 'real' || type === 'none' || n === -1;
+        cfg.groundLocType = original ? -1 : 2;
+        cfg.flyLocMode = 0;
+        cfg.flyLocInject = false;
+        cfg.flyLocFoot8 = false;
+        cfg.flyLocFoot3 = false;
+        cfg.flyLocFoot7 = false;
     }
     function currentJumpLocType() {
         const n = Number(cfg.jumpLocType);
@@ -289,18 +275,27 @@ module.exports = function Speedhack(mod) {
         if (n < 0) return 'real';
         return `${n} (${groundLocTypeName(n)})`;
     }
-    function setJumpLocType(type) {
-        if (type === 'hide' || type === -2 || type === '-2') {
-            cfg.jumpLocType = -2;
-            return;
-        }
-        const n = Number(type);
-        cfg.jumpLocType = (Number.isFinite(n) && n >= 0 && n <= 8) ? n : -1;
+    function setJumpLocType(_type) {
+        cfg.jumpLocType = 2;
     }
-    // Fly modes stay off on boot. Run/walk stay type 2.
-    setFlyMode(0);
-    setGroundLocType(2);
-    if (cfg.jumpLocType == null) cfg.jumpLocType = -2;
+    function lockPacketTypes() {
+        const flyOn = Number(cfg.flyLocType) === 7;
+        setGroundLocType(currentGroundLocType() < 0 ? -1 : 2);
+        setJumpLocType(2);
+        setFlyMode(0);
+        cfg.flyLocType = flyOn ? 7 : -1;
+    }
+    function packetTypeStatus() {
+        const ground = currentGroundLocType() < 0
+            ? 'C_PLAYER_LOCATION original (does nothing)'
+            : 'C_PLAYER_LOCATION type 2 (fall)';
+        const fly = Number(cfg.flyLocType) === -1
+            ? 'C_PLAYER_FLYING_LOCATION original'
+            : 'C_PLAYER_FLYING_LOCATION type 7 (descend)';
+        return `${ground}. Jump stays type 2. ${fly}.`;
+    }
+    // Ground packet is type 2 (fall) or the original client type. Jump stays type 2. Flying packet is type 7 (descend).
+    lockPacketTypes();
 
     const clampMultiplier = (n) => {
         const v = Number(n);
@@ -527,11 +522,9 @@ module.exports = function Speedhack(mod) {
         liveHp = null;
         liveMaxHp = null;
         statsFromThisConnection = false;
-        // Always start speedhack off when you enter a character. Turn it on with - / spd.
-        // Keep the ground loc type (current test: 2 fall). Only fly modes reset.
-        if (cfg.enabled) setEnabled(false, 'login');
+        // Keep the saved GUI. Entering a character does not reset the multiplier,
+        // the packet ticks, or the master switch.
         setFlyMode(0);
-        try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
         broadcastUiState();
         log(currentGroundLocType() < 0
             ? 'loctype=off'
@@ -942,7 +935,7 @@ module.exports = function Speedhack(mod) {
         if (injectingFlyLoc) return;
         flying = true;
         lastClientFlyType = event.type;
-        if (!currentFlyMode() && currentGroundLocType() < 0) return;
+        if (Number(cfg.flyLocType) === -1) return;
 
         const incoming = Number(event.type);
         const want = 7;
@@ -1408,6 +1401,9 @@ module.exports = function Speedhack(mod) {
     }
 
     // ----- enable/disable chokepoint -----
+    function persistSettings() {
+        try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+    }
     function setEnabled(on, source) {
         const changed = cfg.enabled !== on;
         cfg.enabled = on;
@@ -1419,6 +1415,7 @@ module.exports = function Speedhack(mod) {
             replayCachedMoveAt(on ? undefined : 1.0);
         }
         broadcastUiState();
+        if (!(source && source.startsWith('hotkey/hold'))) persistSettings();
         if (source && source.startsWith('hotkey/hold')) return;
         if (changed) log(`${on ? 'ON' : 'OFF'} (${source}) multiplier=${cfg.multiplier}`);
     }
@@ -1429,6 +1426,7 @@ module.exports = function Speedhack(mod) {
         cfg.multiplier = clampMultiplier(presets[name]);
         if (cfg.enabled) replayCachedMoveAt();
         broadcastUiState();
+        persistSettings();
         return true;
     }
 
@@ -1604,6 +1602,7 @@ module.exports = function Speedhack(mod) {
             cfg.multiplier = v;
             if (cfg.enabled) replayCachedMoveAt();
             broadcastUiState();
+            persistSettings();
             return log(`multiplier=${v}`);
         }
 
@@ -1616,6 +1615,7 @@ module.exports = function Speedhack(mod) {
             if (arg === 'off' || arg === 'null' || arg === '') {
                 cfg.fieldMultipliers[fieldKey] = null;
                 if (cfg.enabled) replayCachedMoveAt();
+                persistSettings();
                 return log(`${fieldKey}=null (uses master multiplier ${cfg.multiplier})`);
             }
             const v = parseFloat(arg);
@@ -1624,6 +1624,7 @@ module.exports = function Speedhack(mod) {
             }
             cfg.fieldMultipliers[fieldKey] = v;
             if (cfg.enabled) replayCachedMoveAt();
+            persistSettings();
             return log(`${fieldKey}=${v}`);
         }
 
@@ -1651,6 +1652,7 @@ module.exports = function Speedhack(mod) {
                     applyIndicator(true);
                 }
             }
+            persistSettings();
             return log(`autoDisableInCombat=${cfg.autoDisableInCombat}`);
         }
 
@@ -1690,116 +1692,28 @@ module.exports = function Speedhack(mod) {
             cfg.hotkeyMode = m;
             return log(`hotkeyMode=${m}`);
         }
-        if (sub === 'flytest') {
-            const persistFlytest = () => {
-                try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
-                broadcastUiState();
-            };
-            const arg = (args[1] || '').toLowerCase();
-            if (arg === 'on' || arg === 'off') {
-                setFlyMode(arg === 'on' ? 1 : 0);
-                persistFlytest();
-                return log(`mode=${currentFlyMode()} type=${cfg.flyLocType}`);
-            }
-            if (arg === '1' || arg === 'mode1') {
-                setFlyMode(1);
-                persistFlytest();
-                return log(`mode=1 foot=1 mount=7 fly=7`);
-            }
-            if (arg === '2' || arg === 'mode2') {
-                setFlyMode(2);
-                persistFlytest();
-                return log(`mode=2 foot=8 mount=7 fly=7`);
-            }
-            if (arg === '3' || arg === 'mode3') {
-                setFlyMode(3);
-                persistFlytest();
-                return log(`mode=3 foot=3 mount=7 fly=7`);
-            }
-            if (arg === '4' || arg === 'mode4') {
-                setFlyMode(4);
-                persistFlytest();
-                return log(`mode=4 foot=7 mount=7 fly=7`);
-            }
-            if (arg === 'foot8') {
-                const v = (args[2] || '').toLowerCase();
-                if (v !== 'on' && v !== 'off') return log('usage: spd flytest foot8 on|off');
-                setFlyMode(v === 'on' ? 2 : 0);
-                persistFlytest();
-                return log(`mode=${currentFlyMode()} type=${cfg.flyLocType}`);
-            }
-            if (arg === 'type') {
-                const t = (args[2] || '').toLowerCase();
-                if (t === 'auto' || t === 'map') {
-                    cfg.flyLocType = 'auto';
-                } else {
-                    const n = parseInt(t, 10);
-                    if (!Number.isFinite(n) || n < 0 || n > 8) {
-                        return log('usage: spd flytest type <0..8|auto>  (7=descend, 2=forward, 0=hover)');
-                    }
-                    cfg.flyLocType = n;
-                }
-                persistFlytest();
-                return log(`flytest=${!!cfg.flyLocInject} type=${cfg.flyLocType}`);
-            }
-            return log(`flytest=${!!cfg.flyLocInject} type=${cfg.flyLocType}  (spd flytest on|off | type <n|auto>)`);
-        }
         if (sub === 'loctype') {
-            const persistLocType = () => {
-                try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
-                broadcastUiState();
-            };
             const arg = (args[1] || '').toLowerCase();
-            if (!arg) {
-                const cur = currentGroundLocType();
-                return log(cur < 0
-                    ? 'loctype=off  (spd loctype 0..8|off)  0=run 1=walk 2=fall 5=jump 7=stop'
-                    : `loctype=${cur} (${groundLocTypeName(cur)})`);
-            }
-            if (arg === 'off' || arg === 'real' || arg === 'none') {
-                setGroundLocType(-1);
-                persistLocType();
-                return log('loctype=off (real C_PLAYER_LOCATION type)');
-            }
-            const n = parseInt(arg, 10);
-            if (!Number.isFinite(n) || n < 0 || n > 8) {
-                return log('usage: spd loctype <0..8|off>  (0=run 1=walk 2=fall 5=jump 7=stop)');
-            }
-            setGroundLocType(n);
-            persistLocType();
-            return log(`loctype=${n} (${groundLocTypeName(n)})  fly modes off`);
+            if (arg === '2' || arg === 'fall') setGroundLocType(2);
+            else if (arg === 'off' || arg === 'original' || arg === 'real' || arg === 'none') setGroundLocType(-1);
+            else if (arg) return log('usage: spd loctype 2|original');
+            lockPacketTypes();
+            try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+            broadcastUiState();
+            return log(packetTypeStatus());
         }
-        if (sub === 'jumptype') {
-            const persistJump = () => {
-                try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
-                broadcastUiState();
-            };
-            const arg = (args[1] || '').toLowerCase();
-            if (!arg) {
-                return log(`jumptype=${jumpLocTypeLabel(currentJumpLocType())}  (spd jumptype 0..8|off|hide)`);
-            }
-            if (arg === 'off' || arg === 'real' || arg === 'none') {
-                setJumpLocType(-1);
-                persistJump();
-                return log('jumptype=real (jump packets keep type 5)');
-            }
-            if (arg === 'hide' || arg === 'flat' || arg === 'ground') {
-                setJumpLocType(-2);
-                persistJump();
-                return log('jumptype=hide (jump sent as type 2 on the floor)');
-            }
-            const n = parseInt(arg, 10);
-            if (!Number.isFinite(n) || n < 0 || n > 8) {
-                return log('usage: spd jumptype <0..8|off|hide>');
-            }
-            setJumpLocType(n);
-            persistJump();
-            return log(`jumptype=${n} (${groundLocTypeName(n)})  run/walk still loctype ${currentGroundLocType()}`);
+        if (sub === 'flytest' || sub === 'jumptype') {
+            lockPacketTypes();
+            try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
+            broadcastUiState();
+            return log(packetTypeStatus());
         }
         if (sub === 'reloadhk') { startAhk(); return; }
         if (sub === 'ui')       { openUi(); return; }
         if (sub === 'reset') {
             applyFactorySettings();
+            lockPacketTypes();
+            try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
             startAhk();
             broadcastUiState();
             return log('Settings reset to first-install defaults.');
@@ -1829,6 +1743,8 @@ module.exports = function Speedhack(mod) {
                 for (const k of Object.keys(cfg)) delete cfg[k];
                 Object.assign(cfg, next);
                 stripRemovedSettings();
+                lockPacketTypes();
+                try { if (typeof mod.saveSettings === 'function') mod.saveSettings(); } catch (_) {}
                 if (uiWindow && !uiWindow.isDestroyed()) {
                     uiWindow.webContents.send('spd-config', JSON.parse(JSON.stringify(cfg)));
                 }
@@ -1841,7 +1757,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | flytest on|off | flytest type <n|auto> | loctype <0..8|off> | jumptype <0..8|off|hide> | reloadhk | ui | rl | reload | reloadcfg');
+        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | rl | reload | reloadcfg');
     });
 
     // ===== GUI window =====
@@ -1985,17 +1901,17 @@ module.exports = function Speedhack(mod) {
         const onSave = (_evt, incoming) => {
             if (!incoming || typeof incoming !== 'object') return;
             const combatWas = cfg.autoDisableInCombat;
-            const flyWas = !!cfg.flyLocInject;
             const knownKeys = [
                 'enabled', 'multiplier', 'autoDisableInCombat',
                 'showIndicator', 'indicatorAbnormalityId', 'triggerItemId',
                 'hotkey', 'hotkeyMode', 'ahkPath',
-                'flyLocInject', 'flyLocType', 'flyLocFoot8', 'flyLocFoot3', 'flyLocFoot7', 'flyLocMode',
-                'groundLocType', 'jumpLocType',
             ];
             for (const k of knownKeys) {
                 if (incoming[k] !== undefined && incoming[k] !== cfg[k]) cfg[k] = incoming[k];
             }
+            if (incoming.groundLocType !== undefined) cfg.groundLocType = incoming.groundLocType;
+            if (incoming.flyLocType !== undefined) cfg.flyLocType = incoming.flyLocType;
+            lockPacketTypes();
             if (incoming.presets && typeof incoming.presets === 'object') {
                 cfg.presets = Object.assign({}, cfg.presets || {}, incoming.presets);
             }
@@ -2018,36 +1934,6 @@ module.exports = function Speedhack(mod) {
                     applyIndicator(true);
                 }
             }
-            if (incoming.flyLocMode !== undefined || incoming.flyLocInject !== undefined
-                || incoming.flyLocFoot8 !== undefined || incoming.flyLocFoot3 !== undefined
-                || incoming.flyLocFoot7 !== undefined) {
-                const incomingMode = Number(incoming.flyLocMode);
-                if (incomingMode === 0 || incomingMode === 1 || incomingMode === 2
-                    || incomingMode === 3 || incomingMode === 4) {
-                    setFlyMode(incomingMode);
-                } else if (incoming.flyLocFoot7) {
-                    setFlyMode(4);
-                } else if (incoming.flyLocFoot3) {
-                    setFlyMode(3);
-                } else if (incoming.flyLocFoot8 && incoming.flyLocInject) {
-                    setFlyMode(2);
-                } else if (incoming.flyLocInject) {
-                    setFlyMode(1);
-                } else {
-                    setFlyMode(0);
-                }
-                log(`mode=${currentFlyMode()} type=${cfg.flyLocType}`);
-            }
-            if (incoming.groundLocType !== undefined) {
-                setGroundLocType(incoming.groundLocType);
-                log(currentGroundLocType() < 0
-                    ? 'loctype=off'
-                    : `loctype=${currentGroundLocType()} (${groundLocTypeName(currentGroundLocType())})`);
-            }
-            if (incoming.jumpLocType !== undefined) {
-                setJumpLocType(incoming.jumpLocType);
-                log(`jumptype=${jumpLocTypeLabel(currentJumpLocType())}`);
-            }
         };
         const onToggle = (_evt, on) => setEnabled(!!on, 'ui');
         const onReloadHk = () => startAhk();
@@ -2060,6 +1946,7 @@ module.exports = function Speedhack(mod) {
             cfg.multiplier = n;
             if (cfg.enabled) replayCachedMoveAt();
             broadcastUiState();
+            persistSettings();
         };
 
         ipcMain.on('spd-request-config', onRequest);
@@ -2110,6 +1997,7 @@ module.exports = function Speedhack(mod) {
                 flyLocMode: currentFlyMode(),
                 groundLocType: currentGroundLocType(),
                 jumpLocType: currentJumpLocType(),
+                flyLocType: Number(cfg.flyLocType) === -1 ? -1 : 7,
                 server: guiServerInfo(),
             });
         } catch (_) {}

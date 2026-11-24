@@ -1,5 +1,15 @@
 # Speedhack — Changelog
 
+## 2.64 (2026-11-24)
+
+### Changed
+- GUI no longer has Modes 1–4 or the type lists. It shows two locked rows: `C_PLAYER_LOCATION` type **2** (fall) and `C_PLAYER_FLYING_LOCATION` type **7** (descend).
+- Run, walk, and jump stay on ground type **2**. The jump arc is kept. Real fly stays on flying type **7**.
+- `C_PLAYER_LOCATION` type **2** (fall) is a tick, on by default. Untick sends the original client type. Jump stays type 2 either way.
+- The multiplier starts at **1.0**. A change in the GUI is written to `config.json`, so a Toolbox restart keeps it.
+- `C_PLAYER_FLYING_LOCATION` starts unticked. Tick it to rewrite real fly to type **7**. That choice is saved too.
+- Entering a character no longer turns the master switch off or rewrites the saved settings.
+
 ## 2.63 (2026-09-14)
 
 ### Changed

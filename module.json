@@ -1,7 +1,7 @@
 {
     "disableAutoUpdate": false,
     "name": "speedhack",
-    "version": "2.63",
+    "version": "2.64",
     "author": "ballzyxx",
     "description": "Move-speed multiplier with C_PLAYER_LOCATION type 2 and flying type 7",
     "servers": [
@@ -11,7 +11,7 @@
         "cliName": "Speedhack",
         "guiName": "Speedhack",
         "reloadable": true,
-        "settingsVersion": 10,
+        "settingsVersion": 12,
         "settingsFile": "config.json",
         "settingsMigrator": "settings_migrator.js"
     }

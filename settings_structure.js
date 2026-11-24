@@ -15,11 +15,4 @@ module.exports = [
     { key: 'hotkey',                 name: 'Hotkey (e.g. xbutton1, F11, -). Blank = disabled',     type: 'string' },
     { key: 'hotkeyMode',             name: 'Hotkey behavior: "toggle" or "hold"',                  type: 'string' },
     { key: 'ahkPath',                name: 'AutoHotkey.exe path (only used if hotkey is set)',     type: 'string' },
-    { key: 'flyLocInject',           name: 'Mode 1 (foot 1, mount/fly 7)',                         type: 'bool' },
-    { key: 'flyLocFoot8',            name: 'Mode 2 (foot 8, mount/fly 7)',                         type: 'bool' },
-    { key: 'flyLocFoot3',            name: 'Mode 3 (foot 3, mount/fly 7)',                         type: 'bool' },
-    { key: 'flyLocFoot7',            name: 'Mode 4 (foot 7, mount/fly 7)',                         type: 'bool' },
-    { key: 'flyLocType',             name: 'Movement type label',                                  type: 'string' },
-    { key: 'groundLocType',          name: 'C_PLAYER_LOCATION type (2 = run/walk)',                type: 'number', min: -1, max: 8, step: 1 },
-    { key: 'jumpLocType',            name: 'Jump type (-2 = hide, -1 = real, 0..8)',               type: 'number', min: -2, max: 8, step: 1 },
 ];

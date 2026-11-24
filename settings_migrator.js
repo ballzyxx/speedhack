@@ -35,9 +35,9 @@ module.exports = function migrate(oldVersion, oldSettings) {
         flyLocFoot3: false,
         flyLocFoot7: false,
         flyLocMode: 0,
-        flyLocType: 1,
+        flyLocType: -1,
         groundLocType: 2,
-        jumpLocType: -2,
+        jumpLocType: 2,
     };
     const merged = Object.assign({}, defaults, oldSettings || {});
     // v6 defaulted the fly-loc experiment on. Restore normal movement unless
@@ -57,6 +57,20 @@ module.exports = function migrate(oldVersion, oldSettings) {
     }
     if (oldVersion < 10) {
         merged.jumpLocType = -2;
+    }
+    if (oldVersion < 11) {
+        merged.groundLocType = 2;
+        merged.jumpLocType = 2;
+        merged.flyLocMode = 0;
+        merged.flyLocInject = false;
+        merged.flyLocFoot8 = false;
+        merged.flyLocFoot3 = false;
+        merged.flyLocFoot7 = false;
+        merged.flyLocType = 7;
+    }
+    if (oldVersion < 12) {
+        merged.multiplier = 1;
+        merged.flyLocType = -1;
     }
     delete merged.rampMs;
     delete merged.safeScoreLimit;
