@@ -1,5 +1,10 @@
 # Speedhack — Changelog
 
+## 2.66 (2026-11-24)
+
+### Changed
+- With the `C_PLAYER_LOCATION` tick off, jump sends the original type. With the tick on, jump stays type 2. The arc is kept either way.
+
 ## 2.65 (2026-11-24)
 
 ### Changed

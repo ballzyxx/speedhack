@@ -290,9 +290,9 @@ module.exports = function Speedhack(mod) {
         const fly = Number(cfg.flyLocType) === -1
             ? 'C_PLAYER_FLYING_LOCATION original'
             : 'C_PLAYER_FLYING_LOCATION type 7 (descend)';
-        return `${ground}. Jump stays type 2. ${fly}.`;
+        return `${ground}. ${currentGroundLocType() < 0 ? 'Jump sends the original type.' : 'Jump is type 2.'} ${fly}.`;
     }
-    // Ground packet is type 2 (fall) or the original client type. Jump stays type 2. Flying packet is type 7 (descend).
+    // Ground packet is type 2 (fall) or the original client type. Jump follows that tick. Flying packet is type 7 (descend).
     lockPacketTypes();
 
     const clampMultiplier = (n) => {
@@ -852,7 +852,7 @@ module.exports = function Speedhack(mod) {
         plantingGround = false;
     }
 
-    // Run/walk → type 2. Jump is separate (real / hide / its own type).
+    // Run/walk → type 2 while the location tick is on. Jump follows that tick.
     mod.hook('C_PLAYER_LOCATION', 5, { order: -10, filter: { fake: false } }, (event) => {
         if (plantingGround) return;
         if (cfg.flyLocInject) {
@@ -868,6 +868,7 @@ module.exports = function Speedhack(mod) {
         const jumpLike = incoming === 5
             || (hideJump && (Number(event.jumpDistance) > 0 || isAirborneLoc(event)));
         if (jumpLike) {
+            if (currentGroundLocType() < 0) return;
             if (jumpMode === -1) return;
             lastClientLocType = incoming;
             lastLocMounted = isMountedNow();
