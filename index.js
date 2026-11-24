@@ -13,7 +13,7 @@
  *
  * Features:
  *   - Single global multiplier (1.0 .. 10.0)
- *   - Per-field speed overrides (walk/run/mount/swim)
+ *   - Per-field speed overrides (walk/run)
  *   - AHK hotkey (toggle / hold)
  *   - Item-use trigger
  *   - Auto-disable in combat (opt-in)
@@ -27,7 +27,7 @@
  *   spd s                     → status line
  *   spd on | off              → explicit on/off
  *   spd mult <number>         → set multiplier (1..10)
- *   spd walk|run|mount|swim <n|off>  → per-field speed override
+ *   spd walk|run <n|off>  → per-field speed override
  *   spd preset <name>         → walk | jog | sprint | dash | yeet
  *   spd combat                → toggle auto-disable in combat
  *   spd ind [id]              → toggle indicator, or set abnormality id
@@ -87,8 +87,6 @@ module.exports = function Speedhack(mod) {
     let lastClientLocType = null;
     let lastRewrittenLocType = null;
     let lastLocMounted = null;
-    let lastLocTypeLogAt = 0;
-    let lastFlyTypeLogAt = 0;
     let lastSentFlyLoc = null;
     let lastSentFlyTime = null;
     let cruiseFlySpeed = 0;
@@ -526,9 +524,6 @@ module.exports = function Speedhack(mod) {
         // the packet ticks, or the master switch.
         setFlyMode(0);
         broadcastUiState();
-        log(currentGroundLocType() < 0
-            ? 'loctype=off'
-            : `loctype=${currentGroundLocType()} (${groundLocTypeName(currentGroundLocType())}) jumptype=${jumpLocTypeLabel(currentJumpLocType())}`);
         mod.setTimeout(() => announceCurrentServer(), 0);
     });
 
@@ -892,11 +887,6 @@ module.exports = function Speedhack(mod) {
                 }
                 lastRewrittenLocType = jumpMode;
             }
-            const now = Date.now();
-            if (now - lastLocTypeLogAt > 2000) {
-                lastLocTypeLogAt = now;
-                log(`jumptype ${incoming} -> ${jumpLocTypeLabel(jumpMode)} ${lastLocMounted ? 'mount' : 'foot'}`);
-            }
             return changed ? true : undefined;
         }
         const want = currentGroundLocType();
@@ -911,11 +901,6 @@ module.exports = function Speedhack(mod) {
         }
         event.type = want;
         lastRewrittenLocType = want;
-        const now = Date.now();
-        if (now - lastLocTypeLogAt > 2000) {
-            lastLocTypeLogAt = now;
-            log(`loctype ${lastClientLocType} -> ${want} (${groundLocTypeName(want)}) ${lastLocMounted ? 'mount' : 'foot'}`);
-        }
         return true;
     });
 
@@ -948,11 +933,6 @@ module.exports = function Speedhack(mod) {
         if (capPacketIfTooFast(event, forceCap)) changed = true;
 
         rememberSentFly(event);
-        const now = Date.now();
-        if (now - lastFlyTypeLogAt > 2000) {
-            lastFlyTypeLogAt = now;
-            log(`flytype ${incoming} -> ${want} ${isMountedNow() ? 'mount' : 'foot'}`);
-        }
         return changed ? true : undefined;
     }
     try {
@@ -1586,7 +1566,7 @@ module.exports = function Speedhack(mod) {
             const fmt = (v) => (v === null || v === undefined) ? '(master)' : v;
             const srv = currentServer();
             log(`enabled=${cfg.enabled} multiplier=${cfg.multiplier} combat=${cfg.autoDisableInCombat} ind=${cfg.showIndicator} item=${cfg.triggerItemId} hotkey=${cfg.hotkey || '(none)'} mode=${cfg.hotkeyMode} flymode=${currentFlyMode()} flytype=${cfg.flyLocType} loctype=${currentGroundLocType()} jumptype=${jumpLocTypeLabel(currentJumpLocType())} mounted=${isMountedNow()}`);
-            log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)} mount=${fmt(fm.mountSpeed)} swim=${fmt(fm.swimSpeed)}`);
+            log(`movement: walk=${fmt(fm.walkSpeed)} run=${fmt(fm.runSpeed)}`);
             log(`server=${srv.label || srv.name || '?'} id=${srv.id != null ? srv.id : '?'} host=${srv.host || '?'} kind=${srv.kind}`);
             if (diag.lastReplayErr) log(`last replay error: ${diag.lastReplayErr}`);
             return;
@@ -1606,9 +1586,9 @@ module.exports = function Speedhack(mod) {
             return log(`multiplier=${v}`);
         }
 
-        // Per-field overrides: walk, run, mount, swim. Use "off" to clear.
-        // Examples: spd walk 1.5 | spd run 4 | spd mount off
-        if (sub === 'walk' || sub === 'run' || sub === 'mount' || sub === 'swim') {
+        // Per-field overrides: walk, run. Use "off" to clear.
+        // Examples: spd walk 1.5 | spd run 4
+        if (sub === 'walk' || sub === 'run') {
             const fieldKey = sub + 'Speed';
             cfg.fieldMultipliers = cfg.fieldMultipliers || {};
             const arg = (args[1] || '').toLowerCase();
@@ -1757,7 +1737,7 @@ module.exports = function Speedhack(mod) {
             return;
         }
 
-        log('cmds: spd | s | on | off | mult <n> | walk|run|mount|swim <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | rl | reload | reloadcfg');
+        log('cmds: spd | s | on | off | mult <n> | walk|run <n|off> | preset <name> | combat | ind [id] | item <id> | hotkey <k> | hotkeymode toggle|hold | reloadhk | ui | rl | reload | reloadcfg');
     });
 
     // ===== GUI window =====

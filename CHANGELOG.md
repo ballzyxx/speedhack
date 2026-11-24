@@ -1,5 +1,11 @@
 # Speedhack — Changelog
 
+## 2.65 (2026-11-24)
+
+### Changed
+- Per-type overrides are walk and run only. This client has no mount or swim speed field, so those rows are gone. Run speed is also the ground mount speed.
+- Chat no longer prints the repeating loc, jump, and fly type lines. Turning speedhack on or off still says ON or OFF.
+
 ## 2.64 (2026-11-24)
 
 ### Changed
